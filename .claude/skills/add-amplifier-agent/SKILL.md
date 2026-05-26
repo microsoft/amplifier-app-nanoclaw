@@ -80,7 +80,7 @@ import './amplifier-agent.js';
 
 The amplifier-agent translators rely on two optional fields that aren't on trunk's `McpServerConfig` and `QueryInput`. Both are pure additions — Claude/codex/opencode ignore them.
 
-Edit `container/agent-runner/src/providers/types.ts`. Both edits are idempotent — guard with `grep -q` before applying.
+Edit `container/agent-runner/src/providers/types.ts`. Both edits are idempotent — but the guard MUST be scoped to the specific interface, not file-wide. Trunk's `ProviderOptions` interface already declares `mcpServers?:`; a file-wide `grep -q "mcpServers?:"` would falsely report "already present" and silently skip the QueryInput edit. Scope idempotency checks with `awk '/^export interface QueryInput/,/^}/'` (or equivalent).
 
 **(a)** On `interface McpServerConfig`, add three optional fields before the closing brace. Result should look like:
 
@@ -251,8 +251,8 @@ sqlite3 -header data/v2.db "
 ```bash
 grep -q "./amplifier-agent.js" container/agent-runner/src/providers/index.ts && echo "container barrel: OK"
 grep -q "./amplifier-agent.js" src/providers/index.ts && echo "host barrel: OK"
-grep -q "transport?:" container/agent-runner/src/providers/types.ts && echo "McpServerConfig.transport: OK"
-grep -q "mcpServers?:" container/agent-runner/src/providers/types.ts && echo "QueryInput.mcpServers: OK"
+awk '/^export interface McpServerConfig/,/^}/' container/agent-runner/src/providers/types.ts | grep -q "transport?:" && echo "McpServerConfig.transport: OK"
+awk '/^export interface QueryInput/,/^}/' container/agent-runner/src/providers/types.ts | grep -q "mcpServers?:" && echo "QueryInput.mcpServers: OK"
 grep -q "amplifier-agent-client-ts" container/agent-runner/package.json && echo "TS wrapper dep: OK"
 grep -q "AMPLIFIER_AGENT_REF" container/Dockerfile && echo "Dockerfile ARG: OK"
 grep -q "amplifier-agent prepare" container/Dockerfile && echo "Dockerfile prepare: OK"
