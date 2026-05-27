@@ -36,6 +36,16 @@ export interface ProviderContainerContribution {
   mounts?: VolumeMount[];
   /** Extra env vars to pass to the container (`-e KEY=VALUE`). */
   env?: Record<string, string>;
+
+  /**
+   * Provider opt-out of the OneCLI credential-injection proxy.
+   * Default: false (gateway always applied; standard NanoClaw model).
+   * Set true when the provider holds credentials directly in the container env
+   * (e.g. amplifier-agent direct-key dogfooding mode). Bypasses OneCLI's
+   * Authorization-header rewrite, rate limits, and audit trail — use sparingly
+   * and document the security trade-off at the call site.
+   */
+  skipOneCliGateway?: boolean;
 }
 
 export type ProviderContainerConfigFn = (ctx: ProviderContainerContext) => ProviderContainerContribution;

@@ -72,12 +72,28 @@ export interface QueryInput {
   systemContext?: {
     instructions?: string;
   };
+
+  /**
+   * Per-query MCP server configs. Providers that don't support MCP ignore this.
+   * Added for amplifier-agent.
+   */
+  mcpServers?: Record<string, McpServerConfig>;
 }
 
 export interface McpServerConfig {
   command: string;
   args: string[];
   env: Record<string, string>;
+
+  /**
+   * Transport type. Defaults to 'stdio' when absent.
+   * Added for amplifier-agent wire compatibility.
+   */
+  transport?: 'stdio' | 'sse' | 'streamable_http';
+  /** URL for sse / streamable_http transports. */
+  url?: string;
+  /** HTTP headers for sse / streamable_http transports. */
+  headers?: Record<string, string>;
 }
 
 export interface AgentQuery {

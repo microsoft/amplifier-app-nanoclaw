@@ -20,6 +20,7 @@ ARG INSTALL_CJK_FONTS=false
 # mean every rebuild silently picks up the latest and can break in lockstep
 # across all users.
 ARG CLAUDE_CODE_VERSION=2.1.128
+ARG AMPLIFIER_AGENT_REF=main
 ARG AGENT_BROWSER_VERSION=latest
 ARG VERCEL_VERSION=52.2.1
 ARG BUN_VERSION=1.3.12
@@ -110,6 +111,23 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
 RUN --mount=type=cache,target=/root/.cache/pnpm \
     pnpm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
 
+
+# ---- uv (installs amplifier-agent in the next block) -------------------------
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
+    mv /root/.local/bin/uv /usr/local/bin/ && \
+    mv /root/.local/bin/uvx /usr/local/bin/ && \
+    rm -rf /root/.local/bin
+
+# ---- amplifier-agent engine --------------------------------------------------
+RUN mkdir -p /opt/uv/cache && \
+    UV_TOOL_BIN_DIR=/usr/local/bin UV_CACHE_DIR=/opt/uv/cache \
+        GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt \
+        uv tool install \
+        "amplifier-agent @ git+https://github.com/microsoft/amplifier-agent@${AMPLIFIER_AGENT_REF}" && \
+    chmod -R a+x /root/.local/share/uv/tools/amplifier-agent/bin && \
+    chmod -R a+rX /opt/uv && \
+    chown -R node:node /opt/uv
+
 # ---- ncl CLI wrapper ----------------------------------------------------------
 # Actual script lives in the mounted source at /app/src/cli/ncl.ts.
 RUN printf '#!/bin/sh\nexec bun /app/src/cli/ncl.ts "$@"\n' > /usr/local/bin/ncl && \
@@ -129,4 +147,26 @@ WORKDIR /workspace/group
 
 # tini is PID 1, reaps zombies, forwards signals cleanly. entrypoint.sh does
 # `exec bun ...` so bun runs as tini's direct child.
+
+# Pre-create runtime state dirs and chmod world-writable. NC's container
+# runner spawns the container under the host UID (Docker Desktop on macOS
+# maps the host UID into the container), which differs from the build-time
+# `node` UID. The engine writes to .local/state, .cache, .config, and
+# .amplifier/cache regardless of which UID is actually running.
+USER root
+RUN mkdir -p \
+        /home/node/.local/state/amplifier-agent/sessions \
+        /home/node/.cache/amplifier-agent \
+        /home/node/.config/amplifier-agent \
+        /home/node/.local/share/amplifier-agent \
+        /home/node/.amplifier/cache && \
+    chown -R node:node /home/node/.local /home/node/.cache /home/node/.config /home/node/.amplifier && \
+    chmod -R 0777 \
+        /home/node/.local \
+        /home/node/.cache \
+        /home/node/.config \
+        /home/node/.amplifier \
+        /opt/uv
+USER node
+
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]
