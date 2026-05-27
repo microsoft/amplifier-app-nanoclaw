@@ -156,16 +156,19 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
 ```dockerfile
 # ---- amplifier-agent engine --------------------------------------------------
 RUN mkdir -p /opt/uv/cache && \
-    UV_TOOL_BIN_DIR=/usr/local/bin UV_CACHE_DIR=/opt/uv/cache uv tool install \
-    "amplifier-agent @ git+https://github.com/microsoft/amplifier-agent@${AMPLIFIER_AGENT_REF}" && \
-    chmod +x /usr/local/bin/amplifier-agent /usr/local/bin/amplifier-agent-post-install && \
+    UV_TOOL_BIN_DIR=/usr/local/bin UV_CACHE_DIR=/opt/uv/cache \
+        GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt \
+        uv tool install \
+        "amplifier-agent @ git+https://github.com/microsoft/amplifier-agent@${AMPLIFIER_AGENT_REF}" && \
+    chmod -R a+x /root/.local/share/uv/tools/amplifier-agent/bin && \
     chmod -R a+rX /opt/uv && \
     chown -R node:node /opt/uv
 ```
 
 **Key differences from upstream docs:**
 - `UV_CACHE_DIR=/opt/uv/cache` ensures the cache is in a known location (avoids permission issues with the default `~/.cache`)
-- `chmod +x /usr/local/bin/amplifier-agent` explicitly makes the binary executable (UV may install without execute permissions)
+- `GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt` is required during `uv tool install` because uv shells out to `git clone`, and inside the container git can't find the CA bundle on its own. Without this, the install fails with `server certificate verification failed. CAfile: none CRLfile: none`.
+- `chmod -R a+x /root/.local/share/uv/tools/amplifier-agent/bin` makes the actual binaries executable. `uv tool install` symlinks `/usr/local/bin/amplifier-agent` → `/root/.local/share/uv/tools/amplifier-agent/bin/amplifier-agent`; chmodding the symlink in `/usr/local/bin/` is a no-op — the real file under `/root/.local/share/uv/tools/.../bin/` is what needs the executable bit.
 - Bundle cache prepopulation (`amplifier-agent prepare`) is deferred to runtime to avoid permission constraints during build
 
 **(d)** After the existing `USER node` switch (around line 150), and BEFORE the existing `tini`/entrypoint block, create the runtime state directories:
@@ -278,7 +281,8 @@ awk '/^export interface QueryInput/,/^}/' container/agent-runner/src/providers/t
 grep -q "amplifier-agent-client-ts" container/agent-runner/package.json && echo "✓ TS wrapper dep"
 grep -q "AMPLIFIER_AGENT_REF" container/Dockerfile && echo "✓ Dockerfile ARG"
 grep -q "uv tool install" container/Dockerfile && echo "✓ UV tool install"
-grep -q "chmod +x /usr/local/bin/amplifier-agent" container/Dockerfile && echo "✓ Binary executable"
+grep -q "GIT_SSL_CAINFO" container/Dockerfile && echo "✓ Git SSL CA for install-time clone"
+grep -q "chmod -R a+x /root/.local/share/uv/tools/amplifier-agent/bin" container/Dockerfile && echo "✓ Binary executable"
 grep -q "UV_CACHE_DIR=/opt/uv/cache" container/Dockerfile && echo "✓ Cache directory"
 
 cd container/agent-runner && bun test src/providers/amplifier-agent/event-translator.test.ts && cd -
@@ -299,4 +303,5 @@ After image rebuild, set `agent_provider = 'amplifier-agent'` on a test group an
 - If the engine errors with `provider-anthropic` activation failures, confirm `git clone` from `github.com/microsoft/*` works inside the container.
 - If bundle cache fails to populate, check that containers have outbound HTTPS access to github.com.
 - If approval-related errors appear, confirm the host adapter is NOT passing `approval.onRequest` (Mode A v2 contract).
-- If the binary is not executable (`/bin/sh: amplifier-agent: Permission denied`), ensure `chmod +x /usr/local/bin/amplifier-agent` ran during the image build. Re-run `./container/build.sh` if needed.
+- If the binary is not executable (`/bin/sh: amplifier-agent: Permission denied`), the symlink at `/usr/local/bin/amplifier-agent` chmod is a no-op — chmod the real binaries directory: `chmod -R a+x /root/.local/share/uv/tools/amplifier-agent/bin`. Re-run `./container/build.sh` if needed.
+- If the build fails with `server certificate verification failed. CAfile: none CRLfile: none`, the `uv tool install` step is missing `GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt` on its RUN line. uv shells out to `git clone`, which can't find the CA bundle without that env var inside the container.
