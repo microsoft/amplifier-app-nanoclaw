@@ -34,6 +34,7 @@ import net from 'net';
 import path from 'path';
 
 import { DATA_DIR } from '../src/config.js';
+import { readEnvFile } from '../src/env.js';
 import { createAgentGroup, getAgentGroupByFolder } from '../src/db/agent-groups.js';
 import { initDb } from '../src/db/connection.js';
 import {
@@ -192,11 +193,18 @@ async function main(): Promise<void> {
   let ag: AgentGroup | undefined = getAgentGroupByFolder(folder);
   if (!ag) {
     const agId = generateId('ag');
+    // Provider selection lives in .env (written by setup/auto.ts). We read it
+    // from the file rather than process.env because src/env.ts deliberately
+    // does NOT load .env into process.env to keep secrets out of child envs
+    // (see the comment in src/env.ts). NANOCLAW_DEFAULT_PROVIDER is not a
+    // secret, but using readEnvFile keeps the access pattern consistent.
+    const { NANOCLAW_DEFAULT_PROVIDER } = readEnvFile(['NANOCLAW_DEFAULT_PROVIDER']);
+    const defaultProvider = NANOCLAW_DEFAULT_PROVIDER || null;
     createAgentGroup({
       id: agId,
       name: args.agentName,
       folder,
-      agent_provider: null,
+      agent_provider: defaultProvider,
       created_at: now,
     });
     ag = getAgentGroupByFolder(folder)!;

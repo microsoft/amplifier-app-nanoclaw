@@ -315,6 +315,7 @@ async function main(): Promise<void> {
   }
 
   let displayName: string | undefined;
+  let provider: string | undefined;
   async function resolveDisplayName(): Promise<string> {
     if (displayName) return displayName;
     const preset = process.env.NANOCLAW_DISPLAY_NAME?.trim();
@@ -324,6 +325,13 @@ async function main(): Promise<void> {
     return displayName;
   }
 
+  async function resolveProvider(): Promise<string> {
+    if (provider) return provider;
+    const preset = process.env.NANOCLAW_PROVIDER?.trim();
+    provider = preset || (await askProvider());
+    return provider;
+  }
+
   if (!skip.has('cli-agent') && detectRegisteredGroups(process.cwd())) {
     skip.add('cli-agent');
     skip.add('first-chat');
@@ -331,13 +339,53 @@ async function main(): Promise<void> {
 
   if (!skip.has('cli-agent')) {
     await resolveDisplayName();
+    await resolveProvider();
+
+    // If using amplifier-agent, prompt for internal provider and credentials
+    if (provider === 'amplifier-agent') {
+      const internalProvider = await askAmplifierAgentInternalProvider();
+      const credentials = await askAmplifierAgentCredentials(internalProvider);
+
+      if (credentials && Object.keys(credentials.envVars).length > 0) {
+        // Write all env vars for this provider
+        for (const [key, value] of Object.entries(credentials.envVars)) {
+          writeEnvLine(key, value);
+        }
+        // Set as default provider for all future agents (channels)
+        writeEnvLine('NANOCLAW_DEFAULT_PROVIDER', 'amplifier-agent');
+        // Store which internal provider was selected
+        writeEnvLine('AMPLIFIER_AGENT_INTERNAL_PROVIDER', internalProvider);
+        p.log.message(
+          brandBody(
+            wrapForGutter(
+              `✓ Credentials written to .env for ${internalProvider}`,
+              4,
+            ),
+          ),
+        );
+      } else {
+        p.log.warn(
+          brandBody(
+            wrapForGutter(
+              `No credentials provided. You'll need to manually add the required environment variables to .env before the agent can run.`,
+              4,
+            ),
+          ),
+        );
+      }
+    }
+
+    const args = ['--display-name', displayName!, '--agent-name', CLI_AGENT_NAME, '--folder', '_ping-test'];
+    if (provider !== 'claude') {
+      args.push('--provider', provider!);
+    }
     const res = await runQuietStep(
       'cli-agent',
       {
         running: 'Bringing your assistant online…',
         done: 'Assistant wired up.',
       },
-      ['--display-name', displayName!, '--agent-name', CLI_AGENT_NAME, '--folder', '_ping-test'],
+      args,
     );
     if (!res.ok) {
       await fail(
@@ -398,10 +446,14 @@ async function main(): Promise<void> {
         setupLog.userInput('first_chat_choice', next);
         if (next === 'chat') {
           const terminalAgentName = `${displayName!}'s Terminal`;
+          const terminalArgs = ['exec', 'tsx', 'scripts/init-cli-agent.ts', '--display-name', displayName!, '--agent-name', terminalAgentName];
+          if (provider !== 'claude') {
+            terminalArgs.push('--provider', provider!);
+          }
           const createRes = await runQuietChild(
             'create-terminal-agent',
             'pnpm',
-            ['exec', 'tsx', 'scripts/init-cli-agent.ts', '--display-name', displayName!, '--agent-name', terminalAgentName],
+            terminalArgs,
             { running: `Creating ${terminalAgentName}…`, done: `${terminalAgentName} is ready.` },
           );
           if (!createRes.ok) {
@@ -451,6 +503,36 @@ async function main(): Promise<void> {
       channelChoice = await askChannelChoice();
       if (channelChoice !== 'skip' && channelChoice !== 'other') {
         await resolveDisplayName();
+        // Ask for provider selection for new channels
+        await resolveProvider();
+        if (provider === 'amplifier-agent') {
+          const internalProvider = await askAmplifierAgentInternalProvider();
+          const credentials = await askAmplifierAgentCredentials(internalProvider);
+          if (credentials && Object.keys(credentials.envVars).length > 0) {
+            for (const [key, value] of Object.entries(credentials.envVars)) {
+              writeEnvLine(key, value);
+            }
+            writeEnvLine('NANOCLAW_DEFAULT_PROVIDER', 'amplifier-agent');
+            writeEnvLine('AMPLIFIER_AGENT_INTERNAL_PROVIDER', internalProvider);
+            p.log.message(
+              brandBody(
+                wrapForGutter(
+                  `✓ Credentials written to .env for ${internalProvider}`,
+                  4,
+                ),
+              ),
+            );
+          } else {
+            p.log.warn(
+              brandBody(
+                wrapForGutter(
+                  `No credentials provided. You'll need to manually add the required environment variables to .env before the agent can run.`,
+                  4,
+                ),
+              ),
+            );
+          }
+        }
       }
       let result: void | typeof BACK_TO_CHANNEL_SELECTION;
       if (channelChoice === 'telegram') {
@@ -1159,6 +1241,141 @@ async function askOtherChannelName(): Promise<void | typeof BACK_TO_CHANNEL_SELE
       ),
     ),
   );
+}
+
+async function askProvider(): Promise<string> {
+  const choice = ensureAnswer(
+    await brightSelect<string>({
+      message: 'Which agent provider for your assistant?',
+      options: [
+        { value: 'claude', label: 'Claude (default)', hint: 'recommended' },
+        { value: 'amplifier-agent', label: 'Amplifier Agent' },
+      ],
+    }),
+  );
+  setupLog.userInput('provider', choice);
+  return choice;
+}
+
+async function askAmplifierAgentInternalProvider(): Promise<string> {
+  const choice = ensureAnswer(
+    await brightSelect<string>({
+      message: 'Which internal provider for amplifier-agent?',
+      options: [
+        { value: 'anthropic', label: 'Anthropic', hint: 'recommended' },
+        { value: 'openai', label: 'OpenAI' },
+        { value: 'azure-openai', label: 'Azure OpenAI' },
+        { value: 'ollama', label: 'Ollama (local)' },
+      ],
+    }),
+  );
+  setupLog.userInput('amplifier_agent_internal_provider', choice);
+  return choice;
+}
+
+interface AmplifierAgentCredentials {
+  provider: string;
+  envVars: Record<string, string>;
+}
+
+async function askAmplifierAgentCredentials(provider: string): Promise<AmplifierAgentCredentials | undefined> {
+  const envVars: Record<string, string> = {};
+
+  switch (provider) {
+    case 'anthropic': {
+      const answer = ensureAnswer(
+        await p.password({
+          message: 'Paste your Anthropic API key',
+          mask: '*',
+        }),
+      );
+      const value = (answer as string).trim();
+      if (value) {
+        envVars.ANTHROPIC_API_KEY = value;
+        setupLog.userInput('amplifier_agent_credentials_provided', 'yes');
+        return { provider, envVars };
+      }
+      setupLog.userInput('amplifier_agent_credentials_provided', 'no');
+      return undefined;
+    }
+
+    case 'openai': {
+      const answer = ensureAnswer(
+        await p.password({
+          message: 'Paste your OpenAI API key',
+          mask: '*',
+        }),
+      );
+      const value = (answer as string).trim();
+      if (value) {
+        envVars.OPENAI_API_KEY = value;
+        setupLog.userInput('amplifier_agent_credentials_provided', 'yes');
+        return { provider, envVars };
+      }
+      setupLog.userInput('amplifier_agent_credentials_provided', 'no');
+      return undefined;
+    }
+
+    case 'azure-openai': {
+      const apiKey = ensureAnswer(
+        await p.password({
+          message: 'Paste your Azure OpenAI API key',
+          mask: '*',
+        }),
+      );
+      const apiKeyValue = (apiKey as string).trim();
+
+      const endpoint = ensureAnswer(
+        await p.text({
+          message: 'Enter your Azure OpenAI endpoint URL',
+          placeholder: 'https://<resource-name>.openai.azure.com/',
+        }),
+      );
+      const endpointValue = (endpoint as string).trim();
+
+      // Azure OpenAI SDK requires an explicit API version string. The default
+      // here matches the current Azure-supported GA + recent preview window;
+      // users with locked-in API versions should override it.
+      const apiVersion = ensureAnswer(
+        await p.text({
+          message: 'Enter your Azure OpenAI API version',
+          placeholder: '2024-10-21',
+          initialValue: '2024-10-21',
+        }),
+      );
+      const apiVersionValue = (apiVersion as string).trim();
+
+      if (apiKeyValue && endpointValue && apiVersionValue) {
+        envVars.AZURE_OPENAI_API_KEY = apiKeyValue;
+        envVars.AZURE_OPENAI_ENDPOINT = endpointValue;
+        envVars.AZURE_OPENAI_API_VERSION = apiVersionValue;
+        setupLog.userInput('amplifier_agent_credentials_provided', 'yes');
+        return { provider, envVars };
+      }
+      setupLog.userInput('amplifier_agent_credentials_provided', 'no');
+      return undefined;
+    }
+
+    case 'ollama': {
+      const answer = ensureAnswer(
+        await p.text({
+          message: 'Enter your Ollama base URL',
+          placeholder: 'http://localhost:11434',
+        }),
+      );
+      const value = (answer as string).trim();
+      if (value) {
+        envVars.OLLAMA_BASE_URL = value;
+        setupLog.userInput('amplifier_agent_credentials_provided', 'yes');
+        return { provider, envVars };
+      }
+      setupLog.userInput('amplifier_agent_credentials_provided', 'no');
+      return undefined;
+    }
+
+    default:
+      return undefined;
+  }
 }
 
 // ─── interactive / env helpers ─────────────────────────────────────────

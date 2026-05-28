@@ -15,7 +15,8 @@
  * Usage:
  *   pnpm exec tsx scripts/init-cli-agent.ts \
  *     --display-name "Gavriel" \
- *     [--agent-name "Andy"]
+ *     [--agent-name "Andy"] \
+ *     [--provider "claude|amplifier-agent"]
  */
 import path from 'path';
 
@@ -42,12 +43,14 @@ interface Args {
   displayName: string;
   agentName: string;
   folder?: string;
+  provider?: string;
 }
 
 function parseArgs(argv: string[]): Args {
   let displayName: string | undefined;
   let agentName: string | undefined;
   let folder: string | undefined;
+  let provider: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
     const val = argv[i + 1];
@@ -59,6 +62,9 @@ function parseArgs(argv: string[]): Args {
       i++;
     } else if (key === '--folder') {
       folder = val;
+      i++;
+    } else if (key === '--provider') {
+      provider = val;
       i++;
     }
   }
@@ -73,6 +79,7 @@ function parseArgs(argv: string[]): Args {
     displayName,
     agentName: agentName?.trim() || displayName,
     folder,
+    provider,
   };
 }
 
@@ -109,7 +116,7 @@ async function main(): Promise<void> {
       id: agId,
       name: args.agentName,
       folder,
-      agent_provider: null,
+      agent_provider: args.provider || null,
       created_at: now,
     });
     ag = getAgentGroupByFolder(folder)!;

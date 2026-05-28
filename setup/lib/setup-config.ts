@@ -132,6 +132,18 @@ export const CONFIG: Entry[] = [
     type: 'boolean',
     default: false,
   },
+  {
+    key: 'provider',
+    envVar: 'NANOCLAW_PROVIDER',
+    label: 'Agent provider',
+    help: 'Agent provider for the CLI agent (claude or amplifier-agent).',
+    surface: 'flag',
+    type: 'enum',
+    options: [
+      { value: 'claude', label: 'Claude' },
+      { value: 'amplifier-agent', label: 'Amplifier Agent' },
+    ],
+  },
 ];
 
 // ─── name derivation ───────────────────────────────────────────────────
