@@ -9,7 +9,7 @@ NanoClaw runs agents in a long-lived **poll loop** inside the container. The bac
 
 Trunk ships with only the `claude` provider baked in. This skill copies the amplifier-agent provider files in from the `providers-amplifier-agent` branch, wires them into the host and container barrels, adds the engine to the Dockerfile, and rebuilds the image.
 
-The amplifier-agent provider runs the [`amplifier-agent`](https://github.com/microsoft/amplifier-agent) Python engine as a per-submit subprocess (Mode A v2) and talks to it through `amplifier-agent-client-ts`. The engine ships its own bundle modules (provider-anthropic, tool-mcp, hooks-approval, etc.) which it activates on first use. Today the bundled provider targets Anthropic; future versions are expected to add OpenAI and Azure.
+The amplifier-agent provider runs the [`amplifier-agent`](https://github.com/microsoft/amplifier-agent) Python engine as a per-submit subprocess (Mode A v2) and talks to it through `amplifier-agent-ts`. The engine ships its own bundle modules (provider-anthropic, tool-mcp, hooks-approval, etc.) which it activates on first use. Today the bundled provider targets Anthropic; future versions are expected to add OpenAI and Azure.
 
 ## Install
 
@@ -25,7 +25,7 @@ If all of the following are already present, skip to **Configuration**:
 - `import './amplifier-agent.js';` line in `container/agent-runner/src/providers/index.ts`
 - `transport?:` field on `McpServerConfig` in `container/agent-runner/src/providers/types.ts`
 - `mcpServers?:` field on `QueryInput` in `container/agent-runner/src/providers/types.ts`
-- `amplifier-agent-client-ts` in `container/agent-runner/package.json`
+- `amplifier-agent-ts` in `container/agent-runner/package.json`
 - `ARG AMPLIFIER_AGENT_REF` and `uv tool install "amplifier-agent` in `container/Dockerfile`
 
 Missing pieces — continue below. All steps are idempotent; re-running is safe.
@@ -118,7 +118,7 @@ export interface McpServerConfig {
 In `container/agent-runner/package.json`, add to `dependencies`:
 
 ```json
-"amplifier-agent-client-ts": "github:microsoft/amplifier-agent#main"
+"amplifier-agent-ts": "^0.3.1"
 ```
 
 Then refresh the lockfile inside the container-runner workspace:
@@ -127,7 +127,7 @@ Then refresh the lockfile inside the container-runner workspace:
 cd container/agent-runner && bun install && cd -
 ```
 
-The dep resolves to the TypeScript wrapper bundled with the `amplifier-agent` monorepo. The wrapper is committed as built `dist/` so no postinstall build is needed.
+The dep resolves to [`amplifier-agent-ts`](https://www.npmjs.com/package/amplifier-agent-ts) on npm, the TypeScript SDK published from the `amplifier-agent` monorepo via OIDC trusted publishing (provenance attested).
 
 ### 6. Add the amplifier-agent engine to the container Dockerfile
 
@@ -278,7 +278,7 @@ grep -q "./amplifier-agent.js" container/agent-runner/src/providers/index.ts && 
 grep -q "./amplifier-agent.js" src/providers/index.ts && echo "✓ host barrel"
 awk '/^export interface McpServerConfig/,/^}/' container/agent-runner/src/providers/types.ts | grep -q "transport?:" && echo "✓ McpServerConfig.transport"
 awk '/^export interface QueryInput/,/^}/' container/agent-runner/src/providers/types.ts | grep -q "mcpServers?:" && echo "✓ QueryInput.mcpServers"
-grep -q "amplifier-agent-client-ts" container/agent-runner/package.json && echo "✓ TS wrapper dep"
+grep -q "amplifier-agent-ts" container/agent-runner/package.json && echo "✓ TS wrapper dep"
 grep -q "AMPLIFIER_AGENT_REF" container/Dockerfile && echo "✓ Dockerfile ARG"
 grep -q "uv tool install" container/Dockerfile && echo "✓ UV tool install"
 grep -q "GIT_SSL_CAINFO" container/Dockerfile && echo "✓ Git SSL CA for install-time clone"
