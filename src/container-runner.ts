@@ -218,8 +218,9 @@ export function killContainer(sessionId: string, reason: string, onExit?: () => 
 export function resolveProviderName(
   sessionProvider: string | null | undefined,
   containerConfigProvider: string | null | undefined,
+  agentGroupProvider: string | null | undefined,
 ): string {
-  return (sessionProvider || containerConfigProvider || 'claude').toLowerCase();
+  return (sessionProvider || containerConfigProvider || agentGroupProvider || 'claude').toLowerCase();
 }
 
 function resolveProviderContribution(
@@ -227,7 +228,7 @@ function resolveProviderContribution(
   agentGroup: AgentGroup,
   containerConfig: import('./container-config.js').ContainerConfig,
 ): { provider: string; contribution: ProviderContainerContribution } {
-  const provider = resolveProviderName(session.agent_provider, containerConfig.provider);
+  const provider = resolveProviderName(session.agent_provider, containerConfig.provider, agentGroup.agent_provider);
   const fn = getProviderContainerConfig(provider);
   const contribution = fn
     ? fn({
@@ -429,7 +430,7 @@ async function buildContainerArgs(
     // and src/providers/amplifier-agent.ts for the security trade-off.
     log.info('OneCLI gateway skipped (provider opted out via skipOneCliGateway)', { containerName });
   } else {
-  if (agentIdentifier) {
+    if (agentIdentifier) {
       await onecli.ensureAgent({ name: agentGroup.name, identifier: agentIdentifier });
     }
     const onecliApplied = await onecli.applyContainerConfig(args, { addHostMapping: false, agent: agentIdentifier });
