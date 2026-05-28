@@ -23,6 +23,7 @@ import type { ProviderEvent } from '../types.js';
 
 export type DisplayEvent =
   | { type: 'message'; text: string }
+  | { type: 'result'; text: string }
   | { type: 'tool_use'; name?: string; input?: unknown; [key: string]: unknown }
   | {
       type: 'tool_result';
@@ -190,6 +191,7 @@ function translateError(
 export function translate(ev: DisplayEvent, ctx: TranslateCtx): ProviderEvent[] {
   switch (ev.type) {
     case 'message':
+    case 'result':
       return [
         { type: 'activity' },
         { type: 'result', text: (ev as { text: string }).text },

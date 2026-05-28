@@ -11,7 +11,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.128",
     "@modelcontextprotocol/sdk": "^1.12.1",
-    "amplifier-agent-client-ts": "github:microsoft/amplifier-agent#main",
+    "amplifier-agent-ts": "^0.4.0",
     "cron-parser": "^5.0.0",
     "zod": "^4.0.0"
   },

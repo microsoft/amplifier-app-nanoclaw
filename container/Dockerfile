@@ -20,7 +20,7 @@ ARG INSTALL_CJK_FONTS=false
 # mean every rebuild silently picks up the latest and can break in lockstep
 # across all users.
 ARG CLAUDE_CODE_VERSION=2.1.128
-ARG AMPLIFIER_AGENT_REF=main
+ARG AMPLIFIER_AGENT_REF=engine-v0.3.0
 ARG AGENT_BROWSER_VERSION=latest
 ARG VERCEL_VERSION=52.2.1
 ARG BUN_VERSION=1.3.12
@@ -124,6 +124,8 @@ RUN mkdir -p /opt/uv/cache && \
         GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt \
         uv tool install \
         "amplifier-agent @ git+https://github.com/microsoft/amplifier-agent@${AMPLIFIER_AGENT_REF}" && \
+    chmod 755 /root && \
+    chmod -R a+rwX /root/.local/share/uv/tools/amplifier-agent && \
     chmod -R a+x /root/.local/share/uv/tools/amplifier-agent/bin && \
     chmod -R a+rX /opt/uv && \
     chown -R node:node /opt/uv

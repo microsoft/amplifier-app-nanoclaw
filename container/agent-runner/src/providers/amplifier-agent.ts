@@ -1,7 +1,7 @@
 /**
  * amplifier-agent.ts — NC provider adapter for the amplifier-agent engine.
  *
- * Wraps `amplifier-agent-client-ts` (the v0.2.0 wire wrapper) and exposes it
+ * Wraps `amplifier-agent-ts` (the v0.2.0 wire wrapper) and exposes it
  * via NC's AgentProvider/AgentQuery contract.
  *
  * Key invariants:
@@ -18,7 +18,7 @@
 
 import { execSync } from 'child_process';
 
-import { spawnAgent, AaaError, type SessionHandle } from 'amplifier-agent-client-ts';
+import { spawnAgent, AaaError, type SessionHandle } from 'amplifier-agent-ts';
 
 import { registerProvider } from './provider-registry.js';
 import type {
@@ -175,7 +175,7 @@ class AmplifierAgentQuery implements AgentQuery {
 
     while (!this.aborted) {
       // Prepend system instructions on the first turn only (not on resume
-      // or follow-ups). amplifier-agent-client-ts doesn't expose a
+      // or follow-ups). amplifier-agent-ts doesn't expose a
       // systemPrompt parameter like the Claude SDK does, so we embed the
       // instructions in the initial prompt. The host (NC) builds
       // systemContext.instructions from the per-group CLAUDE.md.
@@ -196,19 +196,46 @@ class AmplifierAgentQuery implements AgentQuery {
       while (true) {
         spawnAttempts++;
         try {
-          handle = await spawnAgent({
+          const internalProvider = process.env.AMPLIFIER_AGENT_INTERNAL_PROVIDER;
+          // A10: NC auto-allows all approvals. In v0.3.x Mode A v2, the wire
+          // has no mid-turn host channel and the wrapper rejects any
+          // approval.onRequest callback (AaaError: approval_not_supported_in_v1).
+          // The bundle's hooks-approval mount is the v1 policy point and
+          // auto-allows by default, which matches NC's intent — so we omit
+          // the approval field entirely. When mid-turn callbacks return in
+          // v1.x (WG-4 in amendment §6), wire them back here.
+          const spawnConfig: Parameters<typeof spawnAgent>[0] = {
             lifecycle: 'one-shot',
             sessionId: turnSessionId,
             resume: this.sessionId != null,
             cwd: this.input.cwd,
             mcpServers: wireMcp,
             host: { capabilities: NC_HOST_CAPABILITIES },
-            approval: {
-              // A10: NC auto-allows all approvals.
-              onRequest: async () => ({ decision: 'allow' }),
-              timeoutMs: APPROVAL_TIMEOUT_MS,
-            },
-          });
+          };
+
+          // Set provider override and env allowlist based on internal provider.
+          // The wrapper's DEFAULT_ALLOWLIST (PATH/HOME/USER/LANG/TERM/TMPDIR) is
+          // not exported and gets replaced — not extended — when env.allowlist
+          // is set, so we inline those names alongside the credential vars.
+          // Without HOME the Python engine throws RuntimeError from Path.home()
+          // and exits before emitting a §4.1 envelope.
+          if (internalProvider) {
+            spawnConfig.providerOverride = internalProvider;
+            const credentialsMap: Record<string, string[]> = {
+              anthropic: ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN'],
+              openai: ['OPENAI_API_KEY'],
+              'azure-openai': ['AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_ENDPOINT'],
+              ollama: ['OLLAMA_BASE_URL'],
+            };
+            const credentials = credentialsMap[internalProvider];
+            if (credentials) {
+              spawnConfig.env = {
+                allowlist: ['PATH', 'HOME', 'USER', 'LANG', 'TERM', 'TMPDIR', ...credentials],
+              };
+            }
+          }
+
+          handle = await spawnAgent(spawnConfig);
           break;
         } catch (err) {
           const code = err instanceof AaaError ? err.code : undefined;

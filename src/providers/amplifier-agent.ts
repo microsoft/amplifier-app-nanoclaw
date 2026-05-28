@@ -38,7 +38,16 @@ export function buildAmplifierAgentContainerConfig(ctx: ProviderContainerContext
   // by root (which is what Docker does when the source path doesn't exist).
   fs.mkdirSync(hostPath, { recursive: true });
 
-  const dotenv = readEnvFile(['ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY']);
+  const dotenv = readEnvFile([
+    'ANTHROPIC_BASE_URL',
+    'ANTHROPIC_API_KEY',
+    'OPENAI_API_KEY',
+    'AZURE_OPENAI_API_KEY',
+    'AZURE_OPENAI_ENDPOINT',
+    'AZURE_OPENAI_API_VERSION',
+    'OLLAMA_BASE_URL',
+    'AMPLIFIER_AGENT_INTERNAL_PROVIDER',
+  ]);
 
   const env: Record<string, string> = {
     AMPLIFIER_AGENT_LOG_LEVEL: 'info',
@@ -49,7 +58,36 @@ export function buildAmplifierAgentContainerConfig(ctx: ProviderContainerContext
     GIT_SSL_NO_VERIFY: '1',
   };
 
+  // Pass the internal provider selection to the container so it knows which
+  // provider (openai, anthropic, etc.) to use with amplifier-agent. Read from
+  // the .env file -- the service process does not load .env into process.env
+  // (see src/env.ts header comment), so process.env is empty here.
+  const internalProvider = dotenv.AMPLIFIER_AGENT_INTERNAL_PROVIDER;
+  if (internalProvider) {
+    env.AMPLIFIER_AGENT_INTERNAL_PROVIDER = internalProvider;
+  }
+
   let skipOneCliGateway = false;
+
+  // Pass through all provider credentials to the container.
+  // OpenAI / Azure OpenAI use standard `Authorization: Bearer` headers, which
+  // OneCLI rewrites cleanly, so they go through the gateway like everything
+  // else. Only the Anthropic direct-key path bypasses OneCLI (see below).
+  if (dotenv.OPENAI_API_KEY) {
+    env.OPENAI_API_KEY = dotenv.OPENAI_API_KEY;
+  }
+  if (dotenv.AZURE_OPENAI_API_KEY) {
+    env.AZURE_OPENAI_API_KEY = dotenv.AZURE_OPENAI_API_KEY;
+  }
+  if (dotenv.AZURE_OPENAI_ENDPOINT) {
+    env.AZURE_OPENAI_ENDPOINT = dotenv.AZURE_OPENAI_ENDPOINT;
+  }
+  if (dotenv.AZURE_OPENAI_API_VERSION) {
+    env.AZURE_OPENAI_API_VERSION = dotenv.AZURE_OPENAI_API_VERSION;
+  }
+  if (dotenv.OLLAMA_BASE_URL) {
+    env.OLLAMA_BASE_URL = dotenv.OLLAMA_BASE_URL;
+  }
 
   if (dotenv.ANTHROPIC_BASE_URL) {
     // OneCLI proxy mode (production / clean integration).
