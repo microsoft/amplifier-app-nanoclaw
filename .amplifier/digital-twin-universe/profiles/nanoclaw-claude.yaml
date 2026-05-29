@@ -123,8 +123,28 @@ provision:
     # --user to docker when hostUid != 0 && != 1000. Running as uid 1000
     # means the heuristic skips --user (1000 === 1000) and the agent
     # container also runs as uid 1000 — matching file ownership.
+    #
+    # ubuntu:24.04 ships with an `ubuntu` user at uid 1000. If that user
+    # already exists, rename it to nano (and move its home) rather than
+    # trying to create a conflicting uid — useradd would fail silently
+    # without set -e and leave no nano user for the subsequent runuser calls.
     - |
-      useradd --create-home --uid 1000 --shell /bin/bash nano
+      set -e
+      if id 1000 >/dev/null 2>&1; then
+        EXISTING="$(id -un 1000)"
+        if [ "$EXISTING" = "nano" ]; then
+          echo "nano user already exists at uid 1000"
+        else
+          echo "uid 1000 is taken by '$EXISTING' — renaming to nano"
+          usermod -l nano -d /home/nano -m "$EXISTING"
+          if getent group "$EXISTING" >/dev/null 2>&1; then
+            groupmod -n nano "$EXISTING"
+          fi
+          usermod -s /bin/bash nano
+        fi
+      else
+        useradd --create-home --uid 1000 --shell /bin/bash nano
+      fi
       usermod -aG docker nano
       echo "nano uid=$(id -u nano) gid=$(id -g nano) groups=$(id -Gn nano)"
       # Verify nano can reach the docker socket (needed for docker build
