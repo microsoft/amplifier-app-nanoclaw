@@ -13,11 +13,23 @@
 # the individual step runners under `setup/<name>.ts` are themselves
 # prompt-free and accept all required input via CLI args.
 #
+# UID design: nanoclaw runs as user `nano` (uid 1000) inside the DTU.
+# This is intentional and required: container-runner.ts only passes
+# `--user <uid>:<gid>` to `docker run` when hostUid != 0 && != 1000.
+# When nanoclaw runs as root (uid 0), --user is skipped, so the agent
+# container falls back to the Dockerfile's `USER node` (uid 1000). That
+# creates a UID mismatch: session DB files are owned by root but the agent
+# process runs as uid 1000 — write permission denied, SQLite reports
+# "attempt to write a readonly database". Running nanoclaw as uid 1000
+# (nano) matches the agent container's USER node exactly: both own the
+# same files and both run as uid 1000. This mirrors how nanoclaw runs on
+# a normal Linux laptop as a regular user.
+#
 # Variables (provided at launch via --var):
 #   NANOCLAW_REPO       nanoclaw git URL to clone (optional; defaults to
-#                       https://github.com/nanocoai/nanoclaw.git)
+#                       https://github.com/manojp99/amplifier-app-nanoclaw.git)
 #   NANOCLAW_REF        nanoclaw git ref (branch/tag/SHA) to clone
-#                       (optional; defaults to main)
+#                       (optional; defaults to master)
 #
 # Passthrough credentials (forwarded from host env when present):
 #   ANTHROPIC_API_KEY   required — used both for OneCLI vault registration
@@ -32,9 +44,8 @@
 #   amplifier-digital-twin exec --visual-id "" <id>     # interactive shell
 #   amplifier-digital-twin destroy <id>                 # clean up
 #
-# Inside the DTU, the nanoclaw service runs in the background; chat from
-# the terminal via `pnpm run chat hi` (from /root/nanoclaw) once the
-# readiness check passes.
+# Inside the DTU, the nanoclaw service runs in the background. To chat:
+#   su - nano -c 'cd /home/nano/nanoclaw && pnpm run chat "hi"'
 
 name: nanoclaw-claude
 description: >
@@ -105,101 +116,170 @@ provision:
       done
       docker version
 
-    # ── 4. Clone nanoclaw ──
+    # ── 3b. Create nano user (uid 1000) ──
+    # nanoclaw must run as a non-root user so that the session DB files
+    # it creates are owned by uid 1000. The agent container image uses
+    # `USER node` (uid 1000), and container-runner.ts only passes
+    # --user to docker when hostUid != 0 && != 1000. Running as uid 1000
+    # means the heuristic skips --user (1000 === 1000) and the agent
+    # container also runs as uid 1000 — matching file ownership.
     - |
-      cd /root
-      git clone --depth 1 \
-        --branch "${NANOCLAW_REF:-main}" \
-        "${NANOCLAW_REPO:-https://github.com/nanocoai/nanoclaw.git}" nanoclaw \
-        || git clone --depth 1 \
-             "${NANOCLAW_REPO:-https://github.com/nanocoai/nanoclaw.git}" nanoclaw
-      cd nanoclaw
-      git log -1 --format='nanoclaw HEAD: %H %s'
+      useradd --create-home --uid 1000 --shell /bin/bash nano
+      usermod -aG docker nano
+      echo "nano uid=$(id -u nano) gid=$(id -g nano) groups=$(id -Gn nano)"
+      # Verify nano can reach the docker socket (needed for docker build
+      # and the docker run calls container-runner.ts makes at chat time).
+      ls -la /var/run/docker.sock
+
+    # ── 4. Clone nanoclaw as nano ──
+    # Clone into /home/nano/nanoclaw so all files are owned by nano from
+    # the start. The sha1(cwd)[:8] Docker image name changes vs /root/nanoclaw
+    # but on a fresh DTU there is no cached image anyway.
+    - |
+      REPO="${NANOCLAW_REPO:-https://github.com/manojp99/amplifier-app-nanoclaw.git}"
+      REF="${NANOCLAW_REF:-master}"
+      runuser -u nano -- env HOME=/home/nano bash -c "
+        git clone --depth 1 --branch '$REF' '$REPO' /home/nano/nanoclaw \
+          || git clone --depth 1 '$REPO' /home/nano/nanoclaw
+        git -C /home/nano/nanoclaw log -1 --format='nanoclaw HEAD: %H %s'
+      "
 
     # ── 5. Install nanoclaw dependencies ──
     - |
-      cd /root/nanoclaw
-      pnpm install
+      runuser -u nano -- env HOME=/home/nano bash -c '
+        cd /home/nano/nanoclaw
+        pnpm install
+      '
 
     # ── 6. Build the agent container image ──
+    # Runs as nano (in the docker group) so the resulting image is
+    # associated with nano's working directory. DOCKER_BUILDKIT=1 is
+    # set explicitly since /etc/profile.d is not sourced for non-login
+    # shells spawned via runuser.
     - |
-      cd /root/nanoclaw
-      pnpm exec tsx setup/index.ts --step container
+      runuser -u nano -- env HOME=/home/nano DOCKER_BUILDKIT=1 bash -c '
+        cd /home/nano/nanoclaw
+        pnpm exec tsx setup/index.ts --step container
+      '
 
     # ── 7. Install + start OneCLI gateway ──
     # The OneCLI step's installer is `curl | sh` which brings up a
     # Docker Compose stack on localhost:10254 and installs the `onecli`
-    # CLI binary into ~/.local/bin. Step implementation has zero prompts.
+    # CLI binary into ~/.local/bin. Run as nano so the binary lands in
+    # /home/nano/.local/bin and ONECLI_URL gets written to nano's .env.
     - |
-      cd /root/nanoclaw
-      export PATH="$HOME/.local/bin:$PATH"
-      pnpm exec tsx setup/index.ts --step onecli
+      runuser -u nano -- env HOME=/home/nano PATH="/home/nano/.local/bin:/usr/local/bin:/usr/bin:/bin" bash -c '
+        cd /home/nano/nanoclaw
+        pnpm exec tsx setup/index.ts --step onecli
+      '
 
     # ── 8. Register the Anthropic key in OneCLI's vault ──
     # --create --value flow short-circuits the interactive secret-entry
-    # flow (setup/auth.ts:35-70).
+    # flow (setup/auth.ts:35-70). Run as nano with the key passed via env
+    # so variable expansion works in root's shell before handoff.
     - |
-      cd /root/nanoclaw
-      export PATH="$HOME/.local/bin:$PATH"
-      pnpm exec tsx setup/index.ts --step auth -- --create --value "$ANTHROPIC_API_KEY"
+      AKEY="$ANTHROPIC_API_KEY"
+      runuser -u nano -- env HOME=/home/nano PATH="/home/nano/.local/bin:/usr/local/bin:/usr/bin:/bin" bash -c "
+        cd /home/nano/nanoclaw
+        pnpm exec tsx setup/index.ts --step auth -- --create --value '$AKEY'
+      "
 
     # ── 9. Set the mount allowlist (empty — no host filesystem sharing) ──
     - |
-      cd /root/nanoclaw
-      pnpm exec tsx setup/index.ts --step mounts -- --empty
+      runuser -u nano -- env HOME=/home/nano bash -c '
+        cd /home/nano/nanoclaw
+        pnpm exec tsx setup/index.ts --step mounts -- --empty
+      '
+
+    # ── 9b. tmpfs for session DBs ──
+    # nanoclaw's per-session SQLite files (inbound.db, outbound.db) are
+    # bind-mounted into the agent container. On macOS hosts where Colima
+    # backs Incus with ZFS, fcntl POSIX locks can fail through Docker
+    # bind mounts on ZFS. Mounting tmpfs provides an additional safety
+    # layer on all platforms (tmpfs is Linux-native in the DTU container
+    # regardless of host OS, and supports both fcntl and mmap cleanly).
+    #
+    # The primary fix for "attempt to write a readonly database" is
+    # running nanoclaw as uid 1000 (nano), not the tmpfs mount — but
+    # tmpfs is kept as insurance against ZFS-specific SQLite edge cases.
+    #
+    # Mount must happen BEFORE the service starts so that the session
+    # directory tree gets created fresh on tmpfs.
+    #
+    # data/ is chowned to nano so the service can create cli.sock,
+    # ncl.sock, and v2.db there. The tmpfs mount point is created with
+    # uid=1000,gid=1000 so nano can create session subdirectories inside.
+    - |
+      mkdir -p /home/nano/nanoclaw/data/v2-sessions
+      chown -R nano:nano /home/nano/nanoclaw/data
+      mount -t tmpfs -o size=2G,uid=1000,gid=1000,mode=0755 tmpfs /home/nano/nanoclaw/data/v2-sessions
+      echo "── v2-sessions filesystem: ──"
+      df -T /home/nano/nanoclaw/data/v2-sessions
 
     # ── 10. Start the nanoclaw service ──
     # Same pattern as the amplifier-agent profile: skip the systemd
     # registration and exec the compiled JS directly.
+    # Run as nano so the service's process.getuid() returns 1000.
     - |
-      cd /root/nanoclaw
-      pnpm run build
-      mkdir -p logs
-      nohup node dist/index.js > logs/nanoclaw.log 2> logs/nanoclaw.error.log &
-      echo $! > nanoclaw.pid
+      runuser -u nano -- env HOME=/home/nano PATH="/home/nano/.local/bin:/usr/local/bin:/usr/bin:/bin" bash -c '
+        cd /home/nano/nanoclaw
+        pnpm run build
+        mkdir -p logs
+        nohup node dist/index.js > logs/nanoclaw.log 2> logs/nanoclaw.error.log &
+        echo $! > nanoclaw.pid
+        echo "nanoclaw service started as PID $(cat nanoclaw.pid)"
+      '
       sleep 2
 
     # ── 11. Wait for both service sockets to appear ──
     - |
-      cd /root/nanoclaw
-      timeout 60 sh -c 'until [ -S data/cli.sock ] && [ -S data/ncl.sock ]; do sleep 1; done' \
+      timeout 60 sh -c 'until [ -S /home/nano/nanoclaw/data/cli.sock ] && [ -S /home/nano/nanoclaw/data/ncl.sock ]; do sleep 1; done' \
         || (echo "ERROR: service sockets did not appear within 60s"; \
-            cat logs/nanoclaw.log; cat logs/nanoclaw.error.log; exit 1)
-      ls -la data/cli.sock data/ncl.sock
+            cat /home/nano/nanoclaw/logs/nanoclaw.log; cat /home/nano/nanoclaw/logs/nanoclaw.error.log; exit 1)
+      ls -la /home/nano/nanoclaw/data/cli.sock /home/nano/nanoclaw/data/ncl.sock
 
     # ── 12. Register the CLI agent group with the default Claude provider ──
     # No --provider arg → defaults to null = claude SDK.
     - |
-      cd /root/nanoclaw
-      pnpm exec tsx scripts/init-cli-agent.ts \
-        --display-name "dtu-user" \
-        --agent-name "Terminal Agent"
+      runuser -u nano -- env HOME=/home/nano PATH="/home/nano/.local/bin:/usr/local/bin:/usr/bin:/bin" bash -c '
+        cd /home/nano/nanoclaw
+        pnpm exec tsx scripts/init-cli-agent.ts \
+          --display-name "dtu-user" \
+          --agent-name "Terminal Agent"
+      '
 
     # ── 13. Sanity check ──
     - |
-      cd /root/nanoclaw
-      echo "nanoclaw process: $(cat nanoclaw.pid)"
-      ls -la data/cli.sock data/ncl.sock data/v2.db
+      echo "nanoclaw process: $(cat /home/nano/nanoclaw/nanoclaw.pid)"
+      ls -la /home/nano/nanoclaw/data/cli.sock /home/nano/nanoclaw/data/ncl.sock /home/nano/nanoclaw/data/v2.db
+      echo "nano uid: $(id -u nano) — agent container USER node uid: 1000 — match: OK"
 
 readiness:
   - name: docker-daemon
     command: "docker ps >/dev/null 2>&1"
   - name: nanoclaw-cli-socket
-    command: "test -S /root/nanoclaw/data/cli.sock"
+    command: "test -S /home/nano/nanoclaw/data/cli.sock"
   - name: nanoclaw-ncl-socket
-    command: "test -S /root/nanoclaw/data/ncl.sock"
+    command: "test -S /home/nano/nanoclaw/data/ncl.sock"
 
 update:
   cmds:
     - |
-      cd /root/nanoclaw
-      git pull --ff-only
-      pnpm install --frozen-lockfile || pnpm install
-      pnpm run build
+      runuser -u nano -- env HOME=/home/nano bash -c '
+        cd /home/nano/nanoclaw
+        git pull --ff-only
+        pnpm install --frozen-lockfile || pnpm install
+        pnpm run build
+      '
       docker info >/dev/null 2>&1 || (dockerd > /var/log/dockerd.log 2>&1 &)
-      if [ -f nanoclaw.pid ]; then kill "$(cat nanoclaw.pid)" 2>/dev/null || true; fi
+      # Restart the service as nano.
+      PID_FILE=/home/nano/nanoclaw/nanoclaw.pid
+      if [ -f "$PID_FILE" ]; then kill "$(cat $PID_FILE)" 2>/dev/null || true; fi
       sleep 1
-      nohup node dist/index.js > logs/nanoclaw.log 2> logs/nanoclaw.error.log &
-      echo $! > nanoclaw.pid
-      timeout 60 sh -c 'until [ -S data/cli.sock ] && [ -S data/ncl.sock ]; do sleep 1; done'
-      ls -la data/cli.sock data/ncl.sock
+      runuser -u nano -- env HOME=/home/nano PATH="/home/nano/.local/bin:/usr/local/bin:/usr/bin:/bin" bash -c '
+        cd /home/nano/nanoclaw
+        nohup node dist/index.js > logs/nanoclaw.log 2> logs/nanoclaw.error.log &
+        echo $! > nanoclaw.pid
+      '
+      timeout 60 sh -c 'until [ -S /home/nano/nanoclaw/data/cli.sock ] && [ -S /home/nano/nanoclaw/data/ncl.sock ]; do sleep 1; done'
+      ls -la /home/nano/nanoclaw/data/cli.sock /home/nano/nanoclaw/data/ncl.sock
