@@ -1248,7 +1248,7 @@ async function askProvider(): Promise<string> {
     await brightSelect<string>({
       message: 'Which agent provider for your assistant?',
       options: [
-        { value: 'claude', label: 'Claude (default)', hint: 'recommended' },
+        { value: 'claude', label: 'Claude (default)' },
         { value: 'amplifier-agent', label: 'Amplifier Agent' },
       ],
     }),
