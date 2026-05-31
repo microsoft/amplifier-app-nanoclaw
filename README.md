@@ -39,8 +39,8 @@ By default NanoClaw runs agents on the Claude Agent SDK. This README walks you t
 ### 1. Clone and run
 
 ```bash
-git clone https://github.com/nanocoai/nanoclaw.git nanoclaw-v2
-cd nanoclaw-v2
+git clone https://github.com/manojp99/amplifier-app-nanoclaw.git
+cd amplifier-app-nanoclaw
 bash nanoclaw.sh
 ```
 
