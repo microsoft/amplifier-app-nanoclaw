@@ -60,7 +60,7 @@ Press Enter through these — they're the same regardless of agent backend:
 ```
 Which agent provider for your assistant?
 
-  ● Claude (default)        recommended
+  ● Claude (default)
   ○ Amplifier Agent
 ```
 
