@@ -46,8 +46,6 @@ bash nanoclaw.sh
 
 The script installs Node, pnpm, and (on macOS) Docker if missing, then hands off to an interactive setup that drives the rest.
 
-> **Skip the agent-provider prompt:** prefix the command with `NANOCLAW_PROVIDER=amplifier-agent`.
-
 ### 2. Walk through the standard steps
 
 Press Enter through these — they're the same regardless of agent backend:
