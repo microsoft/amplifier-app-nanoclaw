@@ -39,11 +39,21 @@ import { translateMcp } from './amplifier-agent/mcp-translator.js';
 /** CR-4: B1 buffer cap (raised from 32 to 256). */
 export const AMPLIFIER_AGENT_BUFFER_CAP = 256;
 
-/** D12: NC uses B1 buffer chaining, NOT wire-level steering. */
-const NC_HOST_CAPABILITIES = {
-  supports_steering: false,
-  supports_structured_errors: true,
-} as const;
+// D12: NC uses B1 buffer chaining, NOT wire-level steering.
+// The `host.capabilities` surface was removed in amplifier-agent-ts 0.5.x
+// ("drop hostCapabilities surface"); intent preserved as comment-only.
+
+/**
+ * Path to the host-policy file that the wrapper forwards to the engine via
+ * `--config <path>` (amplifier-agent-ts >= 0.6.1). The file is written
+ * per-agent-group by the HOST-side provider container config
+ * (src/providers/amplifier-agent.ts in the nanoclaw repo root) into the
+ * existing bind-mount at /home/node/.local/state/amplifier-agent/, so we
+ * read it at this in-container path. Engine reads `provider.module`,
+ * `approval.mode`, and `allowProtocolSkew` from it. See the host-side
+ * file writer for schema, precedence, and security notes.
+ */
+const HOST_CONFIG_PATH = '/home/node/.local/state/amplifier-agent/host_config.json';
 
 /** Stale-session detection. AaaError codes OR plain-text fallback. */
 const STALE_SESSION_RE = /session_not_found|stale_session|invalid_session|session.*not found/i;
@@ -197,20 +207,33 @@ class AmplifierAgentQuery implements AgentQuery {
         spawnAttempts++;
         try {
           const internalProvider = process.env.AMPLIFIER_AGENT_INTERNAL_PROVIDER;
-          // A10: NC auto-allows all approvals. In v0.3.x Mode A v2, the wire
-          // has no mid-turn host channel and the wrapper rejects any
-          // approval.onRequest callback (AaaError: approval_not_supported_in_v1).
-          // The bundle's hooks-approval mount is the v1 policy point and
-          // auto-allows by default, which matches NC's intent — so we omit
-          // the approval field entirely. When mid-turn callbacks return in
-          // v1.x (WG-4 in amendment §6), wire them back here.
+          // A10: NC auto-allows all approvals — now expressed via host_config.json
+          // rather than the wrapper's implicit `-y` default.
+          //
+          // Why `approval: { mode: 'prompt' }` here: amplifier-agent-ts 0.6.x
+          // defaults to emitting `-y` to the engine when the approval field is
+          // unset (argv-builder.js:54-63), and engine argv outranks
+          // host_config.approval.mode (single_turn._resolve_approval_mode). So
+          // leaving the field unset would render the file's approval setting
+          // inert. Setting `mode: 'prompt'` makes the wrapper emit NO approval
+          // flag, deferring the decision to the engine's host_config layer,
+          // which the HOST-side provider has pre-staged at HOST_CONFIG_PATH
+          // with `approval.mode: 'yes'`. Same auto-allow behavior as before,
+          // but now declared in a host-managed file instead of inlined in
+          // wrapper argv. (See src/providers/amplifier-agent.ts in the
+          // nanoclaw repo root for the writer.)
+          //
+          // The `configPath` field forwards `--config <path>` to the engine
+          // (argv-builder.js:41-43). When mid-turn callbacks return in v1.x
+          // (WG-4 in amendment §6), wire them back via approval.onRequest.
           const spawnConfig: Parameters<typeof spawnAgent>[0] = {
             lifecycle: 'one-shot',
             sessionId: turnSessionId,
             resume: this.sessionId != null,
             cwd: this.input.cwd,
             mcpServers: wireMcp,
-            host: { capabilities: NC_HOST_CAPABILITIES },
+            configPath: HOST_CONFIG_PATH,
+            approval: { mode: 'prompt' },
           };
 
           // Set provider override and env allowlist based on internal provider.

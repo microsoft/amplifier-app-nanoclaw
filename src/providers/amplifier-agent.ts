@@ -67,6 +67,42 @@ export function buildAmplifierAgentContainerConfig(ctx: ProviderContainerContext
     env.AMPLIFIER_AGENT_INTERNAL_PROVIDER = internalProvider;
   }
 
+  // Write host_config.json (turn-key host policy file). The amplifier-agent
+  // wrapper (amplifier-agent-ts >= 0.6.1) forwards this file to the engine
+  // via `--config <path>`; the engine reads `provider.module`,
+  // `approval.mode`, and `allowProtocolSkew` from it. The container-side
+  // provider (container/agent-runner/src/providers/amplifier-agent.ts)
+  // sets `approval: { mode: 'prompt' }` in spawnConfig so the engine's
+  // host_config.approval.mode actually governs the headless turn -- the
+  // wrapper's default `-y` flag would otherwise outrank the file.
+  // (See amplifier-agent-ts argv-builder.js:54-63 and the engine's
+  // single_turn._resolve_approval_mode at v0.4.0 caa9d45.)
+  //
+  // File lives at the existing per-agent-group bind-mount root, so it
+  // surfaces inside the container at
+  // /home/node/.local/state/amplifier-agent/host_config.json. NO new
+  // mount needed. NO credentials in this file -- the engine's host_config
+  // schema doesn't accept them; provider keys stay in env (above).
+  //
+  // `provider.module` is included as a declarative mirror; the engine's
+  // precedence puts inline `--provider` (which the container sets via
+  // spawnConfig.providerOverride) ABOVE host_config.provider.module.
+  // The container intentionally keeps providerOverride inline so provider
+  // selection does not depend on file I/O. The file value becomes the
+  // fallback if inline override is ever dropped, and it's the seam for
+  // future provider.config (model name, base URL) tuning.
+  if (internalProvider) {
+    const hostConfig = {
+      provider: { module: internalProvider },
+      approval: { mode: 'yes' as const },
+      allowProtocolSkew: false,
+    };
+    fs.writeFileSync(path.join(hostPath, 'host_config.json'), JSON.stringify(hostConfig, null, 2) + '\n', {
+      encoding: 'utf-8',
+      mode: 0o644,
+    });
+  }
+
   let skipOneCliGateway = false;
 
   // Pass through all provider credentials to the container.
