@@ -20,11 +20,11 @@ ARG INSTALL_CJK_FONTS=false
 # mean every rebuild silently picks up the latest and can break in lockstep
 # across all users.
 ARG CLAUDE_CODE_VERSION=2.1.128
-# Pinned to the v0.4.0 commit SHA rather than the tag. uv's GitHub fast-path
-# has been observed to mis-resolve @v0.4.0 to an ancestor commit (2bd951f)
-# that still carries the duplicate-file wheel-build bug. Pinning the SHA
-# skips ref resolution entirely. caa9d45 == git rev-list -n1 v0.4.0.
-ARG AMPLIFIER_AGENT_REF=caa9d45d65d4a7e8de7d3ae0942dc9aa30553744
+# Pinned to v0.5.1 (main HEAD as of 2026-06-04) by SHA rather than tag.
+# No engine-v* tag has been published since engine-v0.3.0; engine versions
+# 0.4.x and 0.5.x are tracked via pyproject.toml bumps inside commits.
+# 0c69c88 corresponds to "fix(bundle): unmount hooks-approval from default mount (v0.5.1)".
+ARG AMPLIFIER_AGENT_REF=0c69c88b36217cd395e937fc97f5ce246bc02887
 ARG AGENT_BROWSER_VERSION=latest
 ARG VERCEL_VERSION=52.2.1
 ARG BUN_VERSION=1.3.12

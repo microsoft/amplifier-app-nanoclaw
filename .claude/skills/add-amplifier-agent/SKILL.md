@@ -118,7 +118,7 @@ export interface McpServerConfig {
 In `container/agent-runner/package.json`, add to `dependencies`:
 
 ```json
-"amplifier-agent-ts": "^0.3.1"
+"amplifier-agent-ts": "^0.6.1"
 ```
 
 Then refresh the lockfile inside the container-runner workspace:

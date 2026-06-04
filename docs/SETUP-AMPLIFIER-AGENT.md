@@ -395,8 +395,8 @@ Heads up:
 
 | Component | Version | Where |
 |---|---|---|
-| amplifier-agent (engine) | `engine-v0.3.0` | Container image — `git+https://github.com/microsoft/amplifier-agent@engine-v0.3.0` |
-| amplifier-agent-ts (wrapper) | `^0.4.0` | `container/agent-runner/node_modules/amplifier-agent-ts` (from npm) |
+| amplifier-agent (engine) | `0c69c88` (v0.5.1) | Container image — SHA pin: `0c69c88b36217cd395e937fc97f5ce246bc02887` (no `engine-v*` tag published) |
+| amplifier-agent-ts (wrapper) | `^0.6.1` | `container/agent-runner/node_modules/amplifier-agent-ts` (from npm) |
 | Wire protocol | `0.2.0` | engine ↔ wrapper handshake |
 | Built-in bundle | `amplifier-agent-builtin@1.2.1` | Vendored in the engine |
 
@@ -452,7 +452,7 @@ The agent-runner couldn't get a clean response back from the engine subprocess. 
 
 ### `"Unsupported parameter: 'reasoning.effort' is not supported with this model"`
 
-A known interaction between the bundle's `extended_thinking: true` default and the OpenAI provider's parameter handling. **Resolved at `engine-v0.3.0`** by switching the catalog's OpenAI default to `gpt-5.5` (a reasoning-capable model). If you see this after a fresh setup, your container image was built before the fix landed — rebuild with `--no-cache`.
+A known interaction between the bundle's `extended_thinking: true` default and the OpenAI provider's parameter handling. **Resolved since `engine-v0.3.0`** by switching the catalog's OpenAI default to `gpt-5.5` (a reasoning-capable model). The current pin (v0.5.1) is well past this fix. If you're still seeing the bug, your container image is stale — rebuild with `--no-cache`.
 
 If you want to use a different OpenAI model that's NOT reasoning-capable (e.g. `gpt-4o`), set `OPENAI_DEFAULT_MODEL=gpt-4o` in `.env` AND override the bundle's `extended_thinking` to `false` in a custom bundle profile.
 
@@ -479,8 +479,8 @@ tail -50 logs/setup-steps/01-bootstrap.log
 
 ## References
 
-- amplifier-agent engine: https://github.com/microsoft/amplifier-agent (tag `engine-v0.3.0`)
-- amplifier-agent-ts wrapper: https://www.npmjs.com/package/amplifier-agent-ts (`0.4.0`, OIDC trusted-published with provenance)
+- amplifier-agent engine: https://github.com/microsoft/amplifier-agent (pinned at SHA `0c69c88`, equivalent to v0.5.1)
+- amplifier-agent-ts wrapper: https://www.npmjs.com/package/amplifier-agent-ts (`0.6.1`, OIDC trusted-published with provenance)
 - Built-in bundle: vendored at `src/amplifier_agent_lib/bundle/bundle.md` (`amplifier-agent-builtin@1.2.1`)
 - Bundled module catalog: `src/amplifier_agent_cli/provider_sources.py` in the engine repo
 - NanoClaw main README: [../README.md](../README.md)
