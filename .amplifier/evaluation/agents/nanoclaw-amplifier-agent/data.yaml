@@ -1,0 +1,26 @@
+# Extractor contract: what to pull from the NanoClaw DTU after a task runs.
+# This is a hint for the extractor agent, not a rigid schema. NanoClaw may write
+# its deliverables in slightly different places; adapt and record what is real.
+
+agent_under_test: nanoclaw-claude
+
+where_artifacts_live: |
+  NanoClaw runs the agent inside a Docker container whose working directory is
+  the agent-group folder on the DTU host:
+    /home/nano/nanoclaw/groups/<group>/      (typically cli-with-dtu-user)
+  The harness also copies that directory's contents into /workspace/ before
+  extraction, so the same deliverables are visible under /workspace/ too.
+
+pull:
+  - The task deliverable file(s) named in the task instructions, for example
+    Conclusion.txt, data_analysis_answer.txt, or a generated CLI tool plus its
+    README and any output files (CSV, JSON).
+  - The full agent working directory (post-harvest snapshot under /workspace/)
+    so the produced files can be reviewed on the host.
+  - NanoClaw run logs if they exist: /home/nano/nanoclaw/logs/ and
+    /home/nano/nanoclaw/nanoclaw.log
+
+notes: |
+  If the expected deliverable is missing, record it as missing with a brief
+  reason rather than inventing an output. The point of extraction is a faithful
+  snapshot of what NanoClaw actually produced.

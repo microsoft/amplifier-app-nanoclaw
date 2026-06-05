@@ -1,0 +1,27 @@
+# Second agent-under-test: NanoClaw with the amplifier-agent backend (instead of
+# the default Claude Agent SDK). Same NanoClaw app, same driving mechanics and
+# working dir; the only differences are the DTU profile and a REQUIRED launch
+# variable selecting amplifier-agent's internal model provider.
+#
+# INTERNAL_PROVIDER=anthropic keeps the underlying model (Anthropic) the same as
+# nanoclaw-claude, so a comparison isolates the backend (amplifier-agent vs the
+# Claude Agent SDK) rather than the model.
+name: nanoclaw-amplifier-agent
+description: >
+  NanoClaw configured with amplifier-agent as the agent backend, internal
+  provider Anthropic. Evaluated as a DTU profile and driven conversationally,
+  identically to nanoclaw-claude.
+
+# Path to the DTU profile, relative to this agent directory
+# (agents/nanoclaw-amplifier-agent -> evaluation -> .amplifier -> digital-twin-universe).
+profile: ../../../digital-twin-universe/profiles/nanoclaw-amplifier-agent.yaml
+
+# Launch variables passed to the DTU as --var KEY=VALUE. This profile REQUIRES
+# INTERNAL_PROVIDER; anthropic matches nanoclaw-claude's model.
+launch_vars:
+  INTERNAL_PROVIDER: anthropic
+
+# How the harness reaches the running NanoClaw agent inside the DTU (same as claude).
+drive_user: nano
+nanoclaw_dir: /home/nano/nanoclaw
+groups_dir: /home/nano/nanoclaw/groups

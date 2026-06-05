@@ -1,0 +1,19 @@
+# The "agent under test" for this evaluation is the NanoClaw DTU profile itself.
+# Unlike a stock amplifier-evaluation agent (which is an install.yaml layered onto
+# a task's generic DTU), NanoClaw needs a heavyweight profile (Docker-in-Incus,
+# 16GiB, full provisioning). So the profile IS the agent, launched directly by the
+# custom harness, and the harness drives it conversationally via `pnpm run chat`.
+name: nanoclaw-claude
+description: >
+  NanoClaw personal assistant with the default Claude Agent SDK backend, evaluated
+  as a Digital Twin Universe profile. The DTU profile provisions and runs NanoClaw;
+  the harness drives it one chat turn at a time and grades what it produces.
+
+# Path to the DTU profile, relative to this agent directory
+# (agents/nanoclaw-claude -> evaluation -> .amplifier -> digital-twin-universe).
+profile: ../../../digital-twin-universe/profiles/nanoclaw-claude.yaml
+
+# How the harness reaches the running NanoClaw agent inside the DTU.
+drive_user: nano
+nanoclaw_dir: /home/nano/nanoclaw
+groups_dir: /home/nano/nanoclaw/groups
