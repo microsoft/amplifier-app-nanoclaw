@@ -40,7 +40,7 @@ profile: ../../../digital-twin-universe/profiles/nanoclaw-amplifier-agent.yaml
 launch_vars:
   INTERNAL_PROVIDER: anthropic
   NANOCLAW_REPO: https://github.com/microsoft/amplifier-app-nanoclaw.git
-  NANOCLAW_REF: add-evaluation-harness
+  NANOCLAW_REF: main
 
 # How the harness reaches the running NanoClaw agent inside the DTU (same as claude).
 drive_user: nano
