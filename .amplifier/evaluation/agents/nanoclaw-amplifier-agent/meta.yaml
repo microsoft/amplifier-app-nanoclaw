@@ -1,0 +1,48 @@
+# Second agent-under-test: NanoClaw with the amplifier-agent backend (instead of
+# the default Claude Agent SDK). Same NanoClaw app, same driving mechanics and
+# working dir; the only differences are the DTU profile and a REQUIRED launch
+# variable selecting amplifier-agent's internal model provider.
+#
+# INTERNAL_PROVIDER=anthropic keeps the underlying model (Anthropic) the same as
+# nanoclaw-claude, so a comparison isolates the backend (amplifier-agent vs the
+# Claude Agent SDK) rather than the model.
+name: nanoclaw-amplifier-agent
+description: >
+  NanoClaw configured with amplifier-agent as the agent backend, internal
+  provider Anthropic. Evaluated as a DTU profile and driven conversationally,
+  identically to nanoclaw-claude.
+
+# Path to the DTU profile, relative to this agent directory
+# (agents/nanoclaw-amplifier-agent -> evaluation -> .amplifier -> digital-twin-universe).
+profile: ../../../digital-twin-universe/profiles/nanoclaw-amplifier-agent.yaml
+
+# Launch variables passed to the DTU as --var KEY=VALUE.
+#
+# INTERNAL_PROVIDER -- REQUIRED by this profile; anthropic matches
+#                      nanoclaw-claude's model so a comparison isolates the
+#                      backend rather than the underlying LLM.
+#
+# NANOCLAW_REPO / NANOCLAW_REF -- pin the nanoclaw source the DTU clones AND
+#                      builds inside the container. The profile's defaults
+#                      (manojp99/amplifier-app-nanoclaw.git @ master) point
+#                      at a branch that lags this evaluation harness; in
+#                      particular, master predates c8a699e ("bump engine pin
+#                      to v0.5.1 (0c69c88)") and therefore builds an
+#                      amplifier-agent wheel whose vendored bundle.md still
+#                      mounts hooks-approval -- the very hook 0c69c88
+#                      unmounted. The result is every delegated-subagent
+#                      tool call auto-denying with "No approval provider
+#                      available" and the eval scoring 0.
+#                      Pinning to this repo + this branch keeps the eval
+#                      harness and the nanoclaw source-under-test in
+#                      lockstep. When c8a699e (or equivalent) reaches
+#                      microsoft/amplifier-app-nanoclaw@main, update REF.
+launch_vars:
+  INTERNAL_PROVIDER: anthropic
+  NANOCLAW_REPO: https://github.com/microsoft/amplifier-app-nanoclaw.git
+  NANOCLAW_REF: add-evaluation-harness
+
+# How the harness reaches the running NanoClaw agent inside the DTU (same as claude).
+drive_user: nano
+nanoclaw_dir: /home/nano/nanoclaw
+groups_dir: /home/nano/nanoclaw/groups

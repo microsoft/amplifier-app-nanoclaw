@@ -1,0 +1,12 @@
+# Python bytecode produced by running harness.py
+__pycache__/
+*.py[cod]
+
+# Captured evaluation run output must never be source controlled: it can contain
+# provider keys, full prompts/responses, and absolute host paths. By default the
+# harness writes runs to the workspace root (.amplifier/evaluation/nanoclaw/<run>/),
+# outside this repo. These guards cover the case where someone points OUTPUT_DIR
+# (or a standalone checkout) at a directory inside this repo.
+/results/
+/runs/
+/output/
