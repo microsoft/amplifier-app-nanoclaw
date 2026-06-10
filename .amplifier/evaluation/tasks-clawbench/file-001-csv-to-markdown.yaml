@@ -1,0 +1,29 @@
+# Claw Bench task reference (answer-free).
+#
+# This file is the ONLY thing committed for this task. The actual task content
+# (instruction.md, input fixtures, the pytest verifier, expected outputs, and the
+# oracle solution) is NEVER vendored here. The clawbench harness clones claw-bench
+# at run time, drives NanoClaw against the fetched instruction, and grades with the
+# benchmark's own verifier. The clone + answers land in a gitignored cache and are
+# never committed.
+#
+# Grading is run exactly as in the benchmark: claw_bench.core.verifier.verify_task
+# executes verifier/test_output.py with pytest and computes the weighted score from
+# the task's @pytest.mark.weight(n) markers.
+
+source_repo: https://github.com/claw-bench/claw-bench
+# Track the benchmark's main branch (no pinned SHA): fetched fresh each run.
+ref: main
+# Path to the task within the claw-bench repo.
+task_path: tasks/file-operations/file-001-csv-to-markdown
+
+# Mirrored metadata, informational only (the source of truth is the fetched task).
+id: file-001
+domain: file-operations
+level: L1
+
+# Budget for the AIUser to drive NanoClaw to a stable deliverable. This is the
+# harness driving timeout, NOT the claw-bench task.toml timeout (120s), which
+# assumes a fast direct agent; NanoClaw is slower (it keeps working after each
+# `pnpm run chat` turn returns), so we allow more.
+drive_timeout_s: 1200

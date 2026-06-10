@@ -1,0 +1,121 @@
+# NanoClaw (Claude Agent SDK backend) — SLIM TASK profile.
+#
+# Launches from a pre-baked local Incus golden image (local:nanoclaw-golden-claude)
+# instead of ubuntu:24.04. The golden image already has all packages, the nanoclaw
+# checkout + build, the agent container image, node:22-slim in the local docker
+# store, OneCLI installed with the Anthropic key registered, and the CLI agent
+# group in data/v2.db. So this profile does NOT re-provision — it only restarts
+# the runtime services. This is what makes each task launch fast and avoids any
+# Docker Hub pull (the FROM node:22-slim base is already local).
+#
+# The golden image is produced once by run-clawbench.sh from
+# dtu-profiles/nanoclaw-claude-bake.yaml (full provisioning + registry mirror),
+# then `incus publish`ed locally. See run-clawbench.sh.
+
+name: nanoclaw-claude-task
+description: >
+  Slim relaunch of a pre-baked NanoClaw (Claude backend) golden image. Starts
+  dockerd, waits for the auto-restarted OneCLI stack, remounts the session tmpfs,
+  and restarts the nanoclaw service. No Docker Hub pulls, no rebuild.
+
+base:
+  image: local:nanoclaw-golden-claude
+  config:
+    security.nesting: "true"
+    limits.memory: "16GiB"
+    limits.cpu: "8"
+
+passthrough:
+  allow_external: true
+  services:
+    - name: anthropic
+      key_env: ANTHROPIC_API_KEY
+
+provision:
+  setup_cmds:
+    # ── 1. Start dockerd ──
+    # daemon.json (registry mirror) is baked. The OneCLI gateway + postgres
+    # containers were frozen with restart=unless-stopped, so they auto-start
+    # once dockerd is up. node:22-slim and the agent image are already in the
+    # local store, so nothing is pulled.
+    - |
+      export DOCKER_BUILDKIT=1
+      # The golden image is ubuntu:24.04, which boots systemd; systemd auto-starts
+      # docker.service on boot. Spawning a second dockerd here races that one for
+      # /var/run/docker.sock + the pidfile, and the loser's shutdown deletes the
+      # socket -- leaving docker intermittently unreachable ("Cannot connect to the
+      # Docker daemon"). Prefer the systemd-managed daemon; only fall back to a
+      # manual dockerd if docker is still unreachable after a grace period.
+      systemctl start docker >/dev/null 2>&1 || true
+      for i in $(seq 1 30); do
+        docker info >/dev/null 2>&1 && break
+        sleep 1
+      done
+      if ! docker info >/dev/null 2>&1; then
+        echo "systemd docker not up; starting dockerd manually"
+        dockerd > /var/log/dockerd.log 2>&1 &
+      fi
+      for i in $(seq 1 60); do
+        if docker info >/dev/null 2>&1; then echo "docker daemon ready"; break; fi
+        sleep 1
+      done
+      docker version
+      docker ps --format '{{.Names}}  {{.Image}}  {{.Status}}'
+
+    # ── 2. Wait for the OneCLI gateway to come back up ──
+    # The compose stack auto-restarts with dockerd (restart=unless-stopped).
+    # nanoclaw's container-runner needs it reachable at chat time.
+    - |
+      for i in $(seq 1 90); do
+        if curl -sf http://127.0.0.1:10254/api/health >/dev/null 2>&1; then
+          echo "onecli gateway healthy"; break
+        fi
+        sleep 1
+      done
+      curl -s http://127.0.0.1:10254/api/health || echo "WARN: onecli health endpoint not responding yet"
+
+    # ── 3. Remount the session tmpfs ──
+    # tmpfs is volatile, so the bake-time mount did not survive publish. The
+    # mountpoint dir is baked (empty); remount before starting the service.
+    - |
+      mkdir -p /home/nano/nanoclaw/data/v2-sessions
+      chown -R nano:nano /home/nano/nanoclaw/data
+      mount -t tmpfs -o size=2G,uid=1000,gid=1000,mode=0755 tmpfs /home/nano/nanoclaw/data/v2-sessions
+      df -T /home/nano/nanoclaw/data/v2-sessions
+
+    # ── 4. Restart the nanoclaw service ──
+    # dist/ is already built in the golden image, so no pnpm build. The service
+    # recreates data/cli.sock and data/ncl.sock on startup; the CLI agent group
+    # is already registered in data/v2.db (baked, idempotent).
+    - |
+      runuser -u nano -- env HOME=/home/nano PATH="/home/nano/.local/bin:/usr/local/bin:/usr/bin:/bin" bash -c '
+        cd /home/nano/nanoclaw
+        rm -f data/cli.sock data/ncl.sock
+        mkdir -p logs
+        nohup node dist/index.js > logs/nanoclaw.log 2> logs/nanoclaw.error.log &
+        echo $! > nanoclaw.pid
+        echo "nanoclaw service started as PID $(cat nanoclaw.pid)"
+      '
+      sleep 2
+
+    # ── 5. Wait for both service sockets ──
+    - |
+      timeout 90 sh -c 'until [ -S /home/nano/nanoclaw/data/cli.sock ] && [ -S /home/nano/nanoclaw/data/ncl.sock ]; do sleep 1; done' \
+        || (echo "ERROR: service sockets did not appear within 90s"; \
+            cat /home/nano/nanoclaw/logs/nanoclaw.log; cat /home/nano/nanoclaw/logs/nanoclaw.error.log; exit 1)
+      ls -la /home/nano/nanoclaw/data/cli.sock /home/nano/nanoclaw/data/ncl.sock
+
+    # ── 6. Sanity ──
+    - |
+      echo "nanoclaw process: $(cat /home/nano/nanoclaw/nanoclaw.pid)"
+      echo "agent group dirs:"; ls -1 /home/nano/nanoclaw/groups 2>/dev/null || echo "(none)"
+      echo "local docker images (node base must be present, no pull):"
+      docker images --format '{{.Repository}}:{{.Tag}}' | grep -E 'node|nanoclaw-agent' || true
+
+readiness:
+  - name: docker-daemon
+    command: "docker ps >/dev/null 2>&1"
+  - name: nanoclaw-cli-socket
+    command: "test -S /home/nano/nanoclaw/data/cli.sock"
+  - name: nanoclaw-ncl-socket
+    command: "test -S /home/nano/nanoclaw/data/ncl.sock"

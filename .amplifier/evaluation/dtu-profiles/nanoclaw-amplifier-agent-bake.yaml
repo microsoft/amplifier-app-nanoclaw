@@ -1,0 +1,430 @@
+# NanoClaw with amplifier-agent as the agent backend.
+#
+# Launches a NanoClaw environment in an Incus container, configured to run
+# amplifier-agent (Microsoft's modular agent runtime) as the agent backend.
+# The internal provider that amplifier-agent talks to is parameterized by
+# the INTERNAL_PROVIDER launch variable.
+#
+# The profile drives nanoclaw setup non-interactively by calling each
+# setup step directly (`pnpm exec tsx setup/index.ts --step <name>`)
+# rather than going through `bash nanoclaw.sh`. The interactive prompts
+# in nanoclaw.sh and `setup/auto.ts` all live in the orchestration layer;
+# the individual step runners under `setup/<name>.ts` are themselves
+# prompt-free and accept all required input via CLI args.
+#
+# UID design: nanoclaw runs as user `nano` (uid 1000) inside the DTU.
+# This is intentional and required: container-runner.ts only passes
+# `--user <uid>:<gid>` to `docker run` when hostUid != 0 && != 1000.
+# When nanoclaw runs as root (uid 0), --user is skipped, so the agent
+# container falls back to the Dockerfile's `USER node` (uid 1000). That
+# creates a UID mismatch: session DB files are owned by root but the agent
+# process runs as uid 1000 — write permission denied, SQLite reports
+# "attempt to write a readonly database". Running nanoclaw as uid 1000
+# (nano) matches the agent container's USER node exactly: both own the
+# same files and both run as uid 1000. This mirrors how nanoclaw runs on
+# a normal Linux laptop as a regular user.
+#
+# Variables (provided at launch via --var):
+#   INTERNAL_PROVIDER   one of: anthropic | openai | azure-openai | ollama
+#                       (REQUIRED — the model backend amplifier-agent uses)
+#   NANOCLAW_REPO       nanoclaw git URL to clone (optional; defaults to
+#                       https://github.com/microsoft/amplifier-app-nanoclaw.git)
+#   NANOCLAW_REF        nanoclaw git ref (branch/tag/SHA) to clone
+#                       (optional; defaults to main)
+#
+# Passthrough credentials (forwarded from host env when present):
+#   ANTHROPIC_API_KEY            always forwarded (used when
+#                                INTERNAL_PROVIDER=anthropic)
+#   OPENAI_API_KEY               required when INTERNAL_PROVIDER=openai
+#   AZURE_OPENAI_API_KEY         required when INTERNAL_PROVIDER=azure-openai
+#   AZURE_OPENAI_ENDPOINT        required when INTERNAL_PROVIDER=azure-openai
+#   AZURE_OPENAI_API_VERSION     optional; written to .env if set on host
+#   OLLAMA_BASE_URL              optional; defaults to http://localhost:11434
+#                                inside the DTU (which won't work — point at
+#                                a reachable Ollama instance via host env)
+#
+# Launch examples:
+#
+#   # amplifier-agent with Anthropic backend
+#   amplifier-digital-twin launch nanoclaw-amplifier-agent \
+#     --var INTERNAL_PROVIDER=anthropic
+#
+#   # amplifier-agent with OpenAI backend
+#   amplifier-digital-twin launch nanoclaw-amplifier-agent \
+#     --var INTERNAL_PROVIDER=openai
+#
+# After launch:
+#
+#   amplifier-digital-twin exec --visual-id "" <id>     # interactive shell
+#   amplifier-digital-twin destroy <id>                 # clean up
+#
+# Inside the DTU, the nanoclaw service runs in the background. To chat:
+#   su - nano -c 'cd /home/nano/nanoclaw && pnpm run chat "hi"'
+
+name: nanoclaw-amplifier-agent
+description: >
+  NanoClaw configured with amplifier-agent as the agent backend.
+  Internal provider is parameterized via --var INTERNAL_PROVIDER.
+
+base:
+  image: ubuntu:24.04
+  config:
+    # security.nesting=true is applied by default to every DTU launch,
+    # but we set it explicitly here for clarity since this profile depends
+    # on Docker-in-Incus (nanoclaw's agent runtime is itself a Docker
+    # container managed by the host-side service).
+    security.nesting: "true"
+    # nanoclaw service + dockerd + the docker build (which compiles
+    # native modules and runs `bun install` for ~250 packages) needs
+    # more than the 2 GB default. 16 GiB gives headroom; the docker
+    # build's `bun install` OOMs (exit 137) at 8 GiB on busy hosts.
+    # macOS Incus (Lima-backed) may cap below this if the host VM is
+    # sized small — see the memory-info step in setup_cmds and the
+    # Known Issues block at the top of this file.
+    limits.memory: "16GiB"
+    limits.cpu: "8"
+
+passthrough:
+  allow_external: true
+  services:
+    # Anthropic key is always forwarded — used directly by amplifier-agent
+    # when INTERNAL_PROVIDER=anthropic; harmless otherwise.
+    - name: anthropic
+      key_env: ANTHROPIC_API_KEY
+    # Provider-specific keys. The .env writer downstream conditionally
+    # picks the right ones based on INTERNAL_PROVIDER, so unused values
+    # don't matter.
+    - name: openai
+      key_env: OPENAI_API_KEY
+    - name: azure-openai-key
+      key_env: AZURE_OPENAI_API_KEY
+    - name: azure-openai-endpoint
+      key_env: AZURE_OPENAI_ENDPOINT
+    - name: azure-openai-version
+      key_env: AZURE_OPENAI_API_VERSION
+    - name: ollama
+      key_env: OLLAMA_BASE_URL
+
+provision:
+  setup_cmds:
+    # ── 1. Base tooling ──
+    - apt-get update
+    - apt-get install -y --no-install-recommends git curl ca-certificates gnupg build-essential
+
+    # ── 2. Node 22 + pnpm ──
+    - |
+      curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+      apt-get install -y --no-install-recommends nodejs
+      npm install -g pnpm
+
+    # ── 3. Docker Engine ──
+    # nanoclaw spawns its agent runtime as a Docker container, so we
+    # need dockerd running inside this Incus container. systemd isn't
+    # PID 1 here — we start dockerd manually after install.
+    - |
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+        | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+      chmod a+r /etc/apt/keyrings/docker.gpg
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu noble stable" \
+        > /etc/apt/sources.list.d/docker.list
+      apt-get update
+      # docker-buildx-plugin is required because nanoclaw's
+      # container/Dockerfile uses `RUN --mount=type=cache,...` which
+      # needs BuildKit + buildx; the legacy builder fails on those.
+      apt-get install -y --no-install-recommends docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+    - |
+      mkdir -p /var/log
+      # Registry mirror: route docker.io pulls through Google's pull-through
+      # cache so the FROM node:22-slim build (and OneCLI's compose images) do
+      # NOT hit Docker Hub's anonymous rate limit (HTTP 429). Must be written
+      # before dockerd starts. Baked into the golden image so relaunches inherit it.
+      mkdir -p /etc/docker
+      printf '%s\n' '{"registry-mirrors": ["https://mirror.gcr.io"]}' > /etc/docker/daemon.json
+      # DOCKER_BUILDKIT=1 makes `docker build` use BuildKit by default
+      # so the cache-mount RUN steps in nanoclaw's Dockerfile work.
+      echo 'export DOCKER_BUILDKIT=1' > /etc/profile.d/docker-buildkit.sh
+      export DOCKER_BUILDKIT=1
+      dockerd > /var/log/dockerd.log 2>&1 &
+      for i in $(seq 1 30); do
+        if docker info >/dev/null 2>&1; then echo "docker daemon ready"; break; fi
+        sleep 1
+      done
+      docker version
+
+    # ── 3b. Create nano user (uid 1000) ──
+    # nanoclaw must run as a non-root user so that the session DB files
+    # it creates are owned by uid 1000. The agent container image uses
+    # `USER node` (uid 1000), and container-runner.ts only passes
+    # --user to docker when hostUid != 0 && != 1000. Running as uid 1000
+    # means the heuristic skips --user (1000 === 1000) and the agent
+    # container also runs as uid 1000 — matching file ownership.
+    #
+    # ubuntu:24.04 ships with an `ubuntu` user at uid 1000. If that user
+    # already exists, rename it to nano (and move its home) rather than
+    # trying to create a conflicting uid — useradd would fail silently
+    # without set -e and leave no nano user for the subsequent runuser calls.
+    - |
+      set -e
+      if id 1000 >/dev/null 2>&1; then
+        EXISTING="$(id -un 1000)"
+        if [ "$EXISTING" = "nano" ]; then
+          echo "nano user already exists at uid 1000"
+        else
+          echo "uid 1000 is taken by '$EXISTING' — renaming to nano"
+          usermod -l nano -d /home/nano -m "$EXISTING"
+          if getent group "$EXISTING" >/dev/null 2>&1; then
+            groupmod -n nano "$EXISTING"
+          fi
+          usermod -s /bin/bash nano
+        fi
+      else
+        useradd --create-home --uid 1000 --shell /bin/bash nano
+      fi
+      usermod -aG docker nano
+      echo "nano uid=$(id -u nano) gid=$(id -g nano) groups=$(id -Gn nano)"
+      # Verify nano can reach the docker socket (needed for docker build
+      # and the docker run calls container-runner.ts makes at chat time).
+      ls -la /var/run/docker.sock
+
+    # ── 4. Clone nanoclaw as nano ──
+    # Clone into /home/nano/nanoclaw so all files are owned by nano from
+    # the start. The sha1(cwd)[:8] Docker image name changes vs /root/nanoclaw
+    # but on a fresh DTU there is no cached image anyway.
+    - |
+      # NANOCLAW_REPO and NANOCLAW_REF are populated by DTU's --var
+      # substitution, which ONLY replaces bare ${VAR} \u2014 it does not
+      # expand shell parameter expansion like ${VAR:-default}. Previously
+      # this block used ${NANOCLAW_REF:-master} directly, which DTU left
+      # literal so --var NANOCLAW_REF=... was silently ignored and every
+      # launch cloned master regardless. The fix: receive the values into
+      # bare-${VAR} bash assignments (so DTU's substitution kicks in),
+      # then apply defaults via bash's :- operator afterward to handle
+      # the no--var case.
+      REPO="${NANOCLAW_REPO}"
+      REF="${NANOCLAW_REF}"
+      REPO="${REPO:-https://github.com/microsoft/amplifier-app-nanoclaw.git}"
+      REF="${REF:-main}"
+      echo "cloning ${REPO}@${REF}"
+      runuser -u nano -- env HOME=/home/nano bash -c "
+        git clone --depth 1 --branch '$REF' '$REPO' /home/nano/nanoclaw \
+          || git clone --depth 1 '$REPO' /home/nano/nanoclaw
+        git -C /home/nano/nanoclaw log -1 --format='nanoclaw HEAD: %H %s'
+      "
+
+    # ── 5. Pre-seed .env with the amplifier-agent provider config ──
+    # Written as root (which has unrestricted write access) so shell
+    # variable expansion of DTU passthrough vars works naturally.
+    # Immediately chowned to nano so the service and setup steps can
+    # append to it.
+    - |
+      cat > /home/nano/nanoclaw/.env <<EOF
+      NANOCLAW_DEFAULT_PROVIDER=amplifier-agent
+      AMPLIFIER_AGENT_INTERNAL_PROVIDER=${INTERNAL_PROVIDER}
+      EOF
+      case "${INTERNAL_PROVIDER}" in
+        anthropic)
+          [ -n "$ANTHROPIC_API_KEY" ] && echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" >> /home/nano/nanoclaw/.env
+          ;;
+        openai)
+          [ -n "$OPENAI_API_KEY" ] && echo "OPENAI_API_KEY=$OPENAI_API_KEY" >> /home/nano/nanoclaw/.env
+          ;;
+        azure-openai)
+          [ -n "$AZURE_OPENAI_API_KEY" ]     && echo "AZURE_OPENAI_API_KEY=$AZURE_OPENAI_API_KEY"         >> /home/nano/nanoclaw/.env
+          [ -n "$AZURE_OPENAI_ENDPOINT" ]    && echo "AZURE_OPENAI_ENDPOINT=$AZURE_OPENAI_ENDPOINT"       >> /home/nano/nanoclaw/.env
+          [ -n "$AZURE_OPENAI_API_VERSION" ] && echo "AZURE_OPENAI_API_VERSION=$AZURE_OPENAI_API_VERSION" >> /home/nano/nanoclaw/.env
+          ;;
+        ollama)
+          [ -n "$OLLAMA_BASE_URL" ] && echo "OLLAMA_BASE_URL=$OLLAMA_BASE_URL" >> /home/nano/nanoclaw/.env
+          ;;
+        *)
+          echo "ERROR: INTERNAL_PROVIDER must be one of anthropic|openai|azure-openai|ollama, got '${INTERNAL_PROVIDER}'"
+          exit 1
+          ;;
+      esac
+      chown nano:nano /home/nano/nanoclaw/.env
+      echo "wrote .env:"
+      sed 's/=.*KEY=.*$/=<redacted>/' /home/nano/nanoclaw/.env
+
+    # ── 6. Install nanoclaw dependencies ──
+    - |
+      runuser -u nano -- env HOME=/home/nano bash -c '
+        cd /home/nano/nanoclaw
+        pnpm install
+      '
+
+    # ── 7. Sanity check — what does the container actually have? ──
+    # Prints cgroup memory limit + available RAM so OOM failures during
+    # docker build (exit 137 at bun install) can be diagnosed by
+    # comparing requested vs actual.
+    - |
+      echo "── container resource snapshot ──"
+      cat /proc/meminfo | head -3
+      echo "cgroup memory limit:"
+      cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || echo "(cgroup file not present)"
+      echo "nproc: $(nproc)"
+
+    # ── 8. Build the agent container image ──
+    # Runs as nano (in the docker group) so the resulting image is
+    # associated with nano's working directory. DOCKER_BUILDKIT=1 is
+    # set explicitly since /etc/profile.d is not sourced for non-login
+    # shells spawned via runuser.
+    - |
+      runuser -u nano -- env HOME=/home/nano DOCKER_BUILDKIT=1 bash -c '
+        cd /home/nano/nanoclaw
+        pnpm exec tsx setup/index.ts --step container
+      '
+
+    # ── 9. Set the mount allowlist (empty — no host filesystem sharing) ──
+    - |
+      runuser -u nano -- env HOME=/home/nano bash -c '
+        cd /home/nano/nanoclaw
+        pnpm exec tsx setup/index.ts --step mounts -- --empty
+      '
+
+    # ── 9b. tmpfs for session DBs ──
+    # nanoclaw's per-session SQLite files (inbound.db, outbound.db) are
+    # bind-mounted into the agent container. On macOS hosts where Colima
+    # backs Incus with ZFS, fcntl POSIX locks can fail through Docker
+    # bind mounts on ZFS. Mounting tmpfs provides an additional safety
+    # layer on all platforms (tmpfs is Linux-native in the DTU container
+    # regardless of host OS, and supports both fcntl and mmap cleanly).
+    #
+    # The primary fix for "attempt to write a readonly database" is
+    # running nanoclaw as uid 1000 (nano), not the tmpfs mount — but
+    # tmpfs is kept as insurance against ZFS-specific SQLite edge cases.
+    #
+    # Mount must happen BEFORE the service starts so that the session
+    # directory tree gets created fresh on tmpfs.
+    #
+    # data/ is chowned to nano so the service can create cli.sock,
+    # ncl.sock, and v2.db there. The tmpfs mount point is created with
+    # uid=1000,gid=1000 so nano can create session subdirectories inside.
+    - |
+      mkdir -p /home/nano/nanoclaw/data/v2-sessions
+      chown -R nano:nano /home/nano/nanoclaw/data
+      mount -t tmpfs -o size=2G,uid=1000,gid=1000,mode=0755 tmpfs /home/nano/nanoclaw/data/v2-sessions
+      echo "── v2-sessions filesystem: ──"
+      df -T /home/nano/nanoclaw/data/v2-sessions
+
+    # ── 10. Install + start the OneCLI gateway ──
+    # Required even for the amplifier-agent backend: nanoclaw's
+    # container-runner uses @onecli-sh/sdk to register every spawned
+    # agent container with OneCLI (regardless of which provider the
+    # agent itself targets). Skipping this step causes
+    # `ensureAgent` calls to hit `app.onecli.sh/api/agents` with no
+    # local credentials → 401 Unauthorized.
+    #
+    # Run as nano with HOME=/home/nano so the OneCLI installer places
+    # the binary at /home/nano/.local/bin/onecli and writes
+    # ONECLI_URL=http://127.0.0.1:10254 to nano's .env.
+    - |
+      runuser -u nano -- env HOME=/home/nano PATH="/home/nano/.local/bin:/usr/local/bin:/usr/bin:/bin" bash -c '
+        cd /home/nano/nanoclaw
+        pnpm exec tsx setup/index.ts --step onecli
+      '
+
+    # ── 11. Start the nanoclaw service ──
+    # We skip the systemd registration (setup/service.ts --step service)
+    # and just exec the compiled JS in the background — simpler in a DTU
+    # where the container lifecycle is the service lifecycle.
+    # Run as nano so the service's process.getuid() returns 1000, which
+    # is what container-runner.ts reads when deciding whether to pass
+    # --user to docker run.
+    - |
+      runuser -u nano -- env HOME=/home/nano PATH="/home/nano/.local/bin:/usr/local/bin:/usr/bin:/bin" bash -c '
+        cd /home/nano/nanoclaw
+        pnpm run build
+        mkdir -p logs
+        nohup node dist/index.js > logs/nanoclaw.log 2> logs/nanoclaw.error.log &
+        echo $! > nanoclaw.pid
+        echo "nanoclaw service started as PID $(cat nanoclaw.pid)"
+      '
+      sleep 2
+
+    # ── 12. Wait for both service sockets to appear ──
+    # data/cli.sock = inbound message delivery (used by `pnpm run chat`)
+    # data/ncl.sock = admin API (used by the `ncl` CLI)
+    - |
+      timeout 60 sh -c 'until [ -S /home/nano/nanoclaw/data/cli.sock ] && [ -S /home/nano/nanoclaw/data/ncl.sock ]; do sleep 1; done' \
+        || (echo "ERROR: service sockets did not appear within 60s"; \
+            cat /home/nano/nanoclaw/logs/nanoclaw.log; cat /home/nano/nanoclaw/logs/nanoclaw.error.log; exit 1)
+      ls -la /home/nano/nanoclaw/data/cli.sock /home/nano/nanoclaw/data/ncl.sock
+
+    # ── 13. Register the CLI agent group with amplifier-agent provider ──
+    # init-cli-agent.ts writes directly to data/v2.db (SQLite WAL mode,
+    # safe alongside the running service). --provider is critical here:
+    # NANOCLAW_DEFAULT_PROVIDER in .env is only read by init-first-agent.ts
+    # (for DM channels), not by init-cli-agent.ts.
+    - |
+      runuser -u nano -- env HOME=/home/nano PATH="/home/nano/.local/bin:/usr/local/bin:/usr/bin:/bin" bash -c '
+        cd /home/nano/nanoclaw
+        pnpm exec tsx scripts/init-cli-agent.ts \
+          --display-name "dtu-user" \
+          --agent-name "Terminal Agent" \
+          --provider amplifier-agent
+      '
+
+    # ── 14. Sanity check ──
+    - |
+      echo "nanoclaw process: $(cat /home/nano/nanoclaw/nanoclaw.pid)"
+      ls -la /home/nano/nanoclaw/data/cli.sock /home/nano/nanoclaw/data/ncl.sock /home/nano/nanoclaw/data/v2.db
+      grep -E "^NANOCLAW_DEFAULT_PROVIDER|^AMPLIFIER_AGENT_INTERNAL_PROVIDER" /home/nano/nanoclaw/.env
+      echo "nano uid: $(id -u nano) — agent container USER node uid: 1000 — match: OK"
+
+    # ── 15. Freeze for golden image ──
+    # This profile is used ONLY to bake a reusable local Incus image (via
+    # run-clawbench.sh, which stops + `incus publish`es the result). Make the
+    # running OneCLI support containers (onecli gateway + postgres) auto-restart
+    # when dockerd comes back up in a relaunched image, so the slim task profile
+    # only has to start dockerd + the nanoclaw service. Record the baked
+    # nanoclaw SHA for provenance. Local image only.
+    - |
+      # Drop BuildKit cache-mount snapshots (pnpm store<->global hardlinks) before
+      # publish. `incus publish` tars the whole rootfs including the docker/
+      # containerd overlay store; those cache-mount hardlinks make incus's image
+      # UNPACK fail ("Cannot hard link ... No such file or directory") when a task
+      # later launches from the image. The final built images (node:22-slim, the
+      # nanoclaw-agent image) are NOT build cache and survive the prune.
+      docker builder prune -af >/dev/null 2>&1 || true
+      docker buildx prune -af >/dev/null 2>&1 || true
+      echo "── images kept after cache prune ──"
+      docker images --format '{{.Repository}}:{{.Tag}}  {{.Size}}'
+      RUNNING="$(docker ps -q)"
+      if [ -n "$RUNNING" ]; then
+        docker update --restart unless-stopped $RUNNING >/dev/null 2>&1 || true
+      fi
+      echo "── frozen containers (restart=unless-stopped) ──"
+      docker ps --format '{{.Names}}  {{.Image}}  {{.Status}}'
+      echo "baked nanoclaw HEAD: $(runuser -u nano -- git -C /home/nano/nanoclaw rev-parse HEAD 2>/dev/null || echo unknown)"
+
+readiness:
+  - name: docker-daemon
+    command: "docker ps >/dev/null 2>&1"
+  - name: nanoclaw-cli-socket
+    command: "test -S /home/nano/nanoclaw/data/cli.sock"
+  - name: nanoclaw-ncl-socket
+    command: "test -S /home/nano/nanoclaw/data/ncl.sock"
+
+update:
+  cmds:
+    - |
+      runuser -u nano -- env HOME=/home/nano bash -c '
+        cd /home/nano/nanoclaw
+        git pull --ff-only
+        pnpm install --frozen-lockfile || pnpm install
+        pnpm run build
+      '
+      docker info >/dev/null 2>&1 || (dockerd > /var/log/dockerd.log 2>&1 &)
+      # Restart the service as nano.
+      PID_FILE=/home/nano/nanoclaw/nanoclaw.pid
+      if [ -f "$PID_FILE" ]; then kill "$(cat $PID_FILE)" 2>/dev/null || true; fi
+      sleep 1
+      runuser -u nano -- env HOME=/home/nano PATH="/home/nano/.local/bin:/usr/local/bin:/usr/bin:/bin" bash -c '
+        cd /home/nano/nanoclaw
+        nohup node dist/index.js > logs/nanoclaw.log 2> logs/nanoclaw.error.log &
+        echo $! > nanoclaw.pid
+      '
+      timeout 60 sh -c 'until [ -S /home/nano/nanoclaw/data/cli.sock ] && [ -S /home/nano/nanoclaw/data/ncl.sock ]; do sleep 1; done'
+      ls -la /home/nano/nanoclaw/data/cli.sock /home/nano/nanoclaw/data/ncl.sock

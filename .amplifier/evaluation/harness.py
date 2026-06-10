@@ -290,6 +290,22 @@ async def run_task(
 
 async def main_async(args: argparse.Namespace) -> int:
     agent = AgentDef.load(Path(args.agent_dir))
+    # Optional profile override: run.sh points this at the slim golden-image TASK
+    # profile so we reuse a pre-baked local Incus image instead of the heavyweight
+    # ubuntu provisioning (which re-pulls from Docker Hub every task and hits the
+    # anonymous rate limit). We override only the launch profile; everything else
+    # (drive_user, nanoclaw paths, invocation, data.yaml) still comes from the
+    # agent's meta.yaml, so the shared agents/<agent>/meta.yaml stays untouched.
+    if args.profile:
+        prof = Path(args.profile).resolve()
+        if not prof.exists():
+            log(f"FATAL: --profile not found: {prof}")
+            return 2
+        agent.profile_path = prof
+        # The golden image already has provider config (INTERNAL_PROVIDER,
+        # NANOCLAW_REPO/REF) baked into .env at bake time, so the slim task
+        # profile needs no launch vars.
+        agent.launch_vars = {}
     tasks_dir = Path(args.tasks_dir).resolve()
     task_ids = [t.strip() for t in args.task_ids.split(",") if t.strip()]
     out_root = Path(args.output).resolve()
@@ -366,6 +382,12 @@ def main() -> int:
     p.add_argument("--agent-dir", default=str(here / "agents" / "nanoclaw-claude"))
     p.add_argument(
         "--tasks-dir", required=True, help="amplifier-benchmark tasks directory"
+    )
+    p.add_argument(
+        "--profile",
+        default=None,
+        help="override the agent's DTU profile (e.g. the slim golden-image task "
+        "profile); when set, launch_vars are dropped since the golden image bakes them",
     )
     p.add_argument("--task-ids", required=True, help="comma-separated task ids to run")
     p.add_argument("--output", required=True, help="run output directory")
