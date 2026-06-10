@@ -1,0 +1,17 @@
+# Claw Bench task reference (answer-free). See file-001-csv-to-markdown.yaml for
+# the full rationale. Only this reference is committed; task content, inputs, the
+# pytest verifier, expected outputs, and the oracle solution are fetched at run
+# time and never committed.
+
+source_repo: https://github.com/claw-bench/claw-bench
+ref: main
+task_path: tasks/cross-domain/xdom-014-data-driven-email-campaign
+
+id: xdom-014
+domain: cross-domain
+level: L4
+
+# Driving budget for NanoClaw to reach a stable deliverable (harness timeout, not
+# the upstream task.toml timeout, which assumes a fast direct agent). L4 tasks are
+# complex and NanoClaw keeps working after each chat turn returns, so allow more.
+drive_timeout_s: 1200

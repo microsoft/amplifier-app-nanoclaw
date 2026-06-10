@@ -10,3 +10,10 @@ __pycache__/
 /results/
 /runs/
 /output/
+
+# Claw Bench tasks are NEVER vendored. Only the answer-free references under
+# tasks-clawbench/*.yaml are committed. The fetched clone (instruction, inputs,
+# pytest verifier, expected outputs, oracle solution) and the grading venv land in
+# a cache outside this repo by default. Never commit fetched answers.
+/.clawbench-cache/
+/tasks-clawbench/_fetched/

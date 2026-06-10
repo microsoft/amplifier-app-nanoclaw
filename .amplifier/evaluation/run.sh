@@ -18,10 +18,26 @@ WORKSPACE_ROOT="${WORKSPACE_ROOT:-$(cd "$REPO_ROOT/.." && pwd)}"
 EVAL_BUNDLE="${EVAL_BUNDLE:-$WORKSPACE_ROOT/amplifier-bundle-evaluation}"
 TASKS_DIR="${TASKS_DIR:-$EVAL_BUNDLE/amplifier-benchmark/tasks}"
 # Starter set: easy / conversational benchmark tasks. Override with TASK_IDS.
-TASK_IDS="${TASK_IDS:-arxiv_conclusion_extraction,pdf-hr-q2,cpsc_recall_monitor}"
+TASK_IDS="${TASK_IDS:-arxiv_conclusion_extraction,pdf-hr-q2,cpsc_recall_monitor,chiptune_generator,ipo_tracker,news_research_tool,code-discrepancy-docs-knack,pixel_art_generator,code-discrepancy-docstrings-grasp,git_changelog_generator,energy_forecast_new_england,style_blender}"
 # Which agent-under-test to run (a directory under agents/). Override with AGENT.
 AGENT="${AGENT:-nanoclaw-claude}"
 [ -d "$HERE/agents/$AGENT" ] || { echo "FATAL: agent dir not found: $HERE/agents/$AGENT"; exit 1; }
+
+# Golden image (the fix for Docker Hub 429s + slow per-task provisioning):
+# On the FIRST run for an agent, this script bakes a reusable LOCAL Incus image
+# from dtu-profiles/<agent>-bake.yaml (full provisioning + a registry mirror so
+# the FROM node:22-slim build never hits Docker Hub's rate limit), then
+# `incus publish`es it as local:nanoclaw-golden-<agent>. Every task then launches
+# from that image via the slim dtu-profiles/<agent>-task.yaml, which only restarts
+# services -- no apt/pnpm/docker-build, no Docker Hub pulls. The image stays local
+# (nothing is pushed anywhere). Re-bake by deleting it: `incus image delete <name>`.
+# The image alias is shared with run-clawbench.sh, so a bake done by either line
+# of work is reused by the other (both target the same nanoclaw source).
+BAKE_PROFILE="$HERE/dtu-profiles/${AGENT}-bake.yaml"
+TASK_PROFILE="$HERE/dtu-profiles/${AGENT}-task.yaml"
+GOLDEN_IMAGE="${GOLDEN_IMAGE:-nanoclaw-golden-${AGENT#nanoclaw-}}"
+[ -f "$BAKE_PROFILE" ] || { echo "FATAL: bake profile not found: $BAKE_PROFILE"; exit 1; }
+[ -f "$TASK_PROFILE" ] || { echo "FATAL: task profile not found: $TASK_PROFILE"; exit 1; }
 
 echo "== preflight =="
 command -v amplifier-digital-twin >/dev/null || { echo "FATAL: amplifier-digital-twin not found"; exit 1; }
@@ -44,12 +60,51 @@ fi
 
 [ -d "$TASKS_DIR" ] || { echo "FATAL: tasks dir not found: $TASKS_DIR"; exit 1; }
 
+# ── Golden image: bake once, reuse forever ───────────────────────────────────
+if incus image info "$GOLDEN_IMAGE" >/dev/null 2>&1; then
+  echo "== golden image: reusing local:$GOLDEN_IMAGE =="
+else
+  echo "== golden image: baking local:$GOLDEN_IMAGE (one-time, ~10-15 min) =="
+  BUILD="nc-golden-build-${AGENT}"
+  incus delete --force "$BUILD" >/dev/null 2>&1 || true
+
+  # Mirror the agent's launch_vars (e.g. INTERNAL_PROVIDER, NANOCLAW_REPO/REF)
+  # from meta.yaml so the baked image clones + configures the same source the
+  # eval would. claude has none (uses profile defaults).
+  mapfile -t VARARGS < <(python3 - "$HERE/agents/$AGENT/meta.yaml" <<'PY'
+import sys, yaml
+m = yaml.safe_load(open(sys.argv[1])) or {}
+for k, v in (m.get("launch_vars") or {}).items():
+    print("--var"); print(f"{k}={v}")
+PY
+)
+
+  # Clean up the half-baked build container if anything below fails.
+  bake_cleanup() { incus delete --force "$BUILD" >/dev/null 2>&1 || true; }
+  trap bake_cleanup ERR
+
+  echo "  launching build container $BUILD from $(basename "$BAKE_PROFILE") ${VARARGS[*]:-}"
+  amplifier-digital-twin launch --name "$BUILD" "${VARARGS[@]}" "$BAKE_PROFILE"
+
+  echo "  stopping $BUILD for a clean filesystem snapshot ..."
+  incus stop "$BUILD"
+
+  echo "  publishing local:$GOLDEN_IMAGE ..."
+  incus publish "$BUILD" --alias "$GOLDEN_IMAGE"
+
+  echo "  deleting build container $BUILD ..."
+  incus delete --force "$BUILD"
+  trap - ERR
+  echo "  golden image ready: $(incus image info "$GOLDEN_IMAGE" | awk -F': ' '/Fingerprint/{print $2}' | head -c12)"
+fi
+
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 OUTPUT_DIR="${OUTPUT_DIR:-$WORKSPACE_ROOT/.amplifier/evaluation/nanoclaw/${RUN_ID}-${AGENT}}"
 mkdir -p "$OUTPUT_DIR"
 
 echo "== nanoclaw evaluation =="
 echo "  agent     : $AGENT"
+echo "  golden    : local:$GOLDEN_IMAGE (task profile: $(basename "$TASK_PROFILE"))"
 echo "  tasks_dir : $TASKS_DIR"
 echo "  task_ids  : $TASK_IDS"
 echo "  output    : $OUTPUT_DIR"
@@ -58,6 +113,7 @@ echo
 python3 "$HERE/harness.py" \
   --agent-dir "$HERE/agents/$AGENT" \
   --tasks-dir "$TASKS_DIR" \
+  --profile "$TASK_PROFILE" \
   --task-ids "$TASK_IDS" \
   --max-parallel "${MAX_PARALLEL:-1}" \
   --output "$OUTPUT_DIR" 2>&1 | tee "$OUTPUT_DIR/harness.log"
