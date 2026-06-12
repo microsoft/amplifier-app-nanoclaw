@@ -18,8 +18,10 @@
  * shared installs. See SKILL.md "Known upstream gap" callout.
  *
  * Volume layout: per-agent-group bind mount of $DATA_DIR/amplifier-agent/<id>/
- * at /home/node/.local/state/amplifier-agent/ so transcripts survive
- * container restarts.
+ * at /home/node/.amplifier-agent/ so transcripts, host config, and bundle
+ * cache survive container restarts. Engine v0.6.0 unified its storage tree
+ * under this single root (replacing the XDG layout from v0.5.x); see
+ * amplifier-agent `docs/designs/2026-06-11-drop-xdg-and-flag-cleanup.md`.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -31,6 +33,51 @@ import {
   type ProviderContainerContext,
   type ProviderContainerContribution,
 } from './provider-container-registry.js';
+
+/**
+ * The set of amplifier-agent "internal providers" (LLM backends). Used to
+ * recognize a `provider:` prefix on the `--model` field. Keep this in sync
+ * with the credentialsMap in container/agent-runner/src/providers/
+ * amplifier-agent.ts -- if amplifier-agent adds a fifth provider module,
+ * update both.
+ */
+const VALID_INTERNAL_PROVIDERS = new Set(['anthropic', 'openai', 'azure-openai', 'ollama']);
+
+/**
+ * Parse the `model` field from container.json into an optional provider
+ * prefix and a model name.
+ *
+ *   "claude-sonnet-4-5"             -> { model: "claude-sonnet-4-5" }
+ *   "anthropic:claude-sonnet-4-5"   -> { provider: "anthropic", model: "claude-sonnet-4-5" }
+ *   "ollama:llama3.2:latest"        -> { provider: "ollama",    model: "llama3.2:latest" }
+ *                                       (first-colon split lets ollama tags survive)
+ *   "claud:foo"                     -> throws (strict: unknown prefix)
+ *   "anthropic:"                    -> throws (empty model name)
+ *
+ * Bare strings (no colon) are returned verbatim as the model name, letting
+ * the caller fall back to the install-wide AMPLIFIER_AGENT_INTERNAL_PROVIDER
+ * for provider selection. A prefix is only recognized when it matches a
+ * known internal provider; anything else fails fast so typos can't silently
+ * be treated as model names.
+ */
+function parseModel(raw: string | undefined): { provider?: string; model?: string } {
+  if (!raw) return {};
+  const idx = raw.indexOf(':');
+  if (idx === -1) return { model: raw };
+  const prefix = raw.slice(0, idx);
+  const rest = raw.slice(idx + 1);
+  if (!VALID_INTERNAL_PROVIDERS.has(prefix)) {
+    throw new Error(
+      `Invalid --model value "${raw}": unknown internal-provider prefix "${prefix}". ` +
+        `Valid prefixes: ${[...VALID_INTERNAL_PROVIDERS].join(', ')}. ` +
+        `Use a bare model name (no colon) to fall back to AMPLIFIER_AGENT_INTERNAL_PROVIDER from .env.`,
+    );
+  }
+  if (!rest) {
+    throw new Error(`Invalid --model value "${raw}": empty model name after "${prefix}:".`);
+  }
+  return { provider: prefix, model: rest };
+}
 
 export function buildAmplifierAgentContainerConfig(ctx: ProviderContainerContext): ProviderContainerContribution {
   const hostPath = path.join(DATA_DIR, 'amplifier-agent', ctx.agentGroupId);
@@ -58,46 +105,83 @@ export function buildAmplifierAgentContainerConfig(ctx: ProviderContainerContext
     GIT_SSL_NO_VERIFY: '1',
   };
 
-  // Pass the internal provider selection to the container so it knows which
-  // provider (openai, anthropic, etc.) to use with amplifier-agent. Read from
-  // the .env file -- the service process does not load .env into process.env
-  // (see src/env.ts header comment), so process.env is empty here.
-  const internalProvider = dotenv.AMPLIFIER_AGENT_INTERNAL_PROVIDER;
-  if (internalProvider) {
-    env.AMPLIFIER_AGENT_INTERNAL_PROVIDER = internalProvider;
+  // Resolve the effective LLM backend for THIS agent group.
+  //
+  // Two sources, in priority order:
+  //   1. A `<provider>:` prefix on the `--model` field in container.json.
+  //      Lets a user run `--model anthropic:claude-sonnet-4-5` to opt
+  //      this group onto Anthropic, independently of any other group.
+  //   2. AMPLIFIER_AGENT_INTERNAL_PROVIDER from .env -- the install-wide
+  //      fallback for groups that haven't overridden their model with a
+  //      prefix. (Read from .env because the service process does not
+  //      load .env into process.env; see src/env.ts header comment.)
+  //
+  // If neither source provides a provider, we pass nothing to the container
+  // and the engine will fail at first turn with a clear "no provider
+  // selected" error. That's louder than silently picking a default, which
+  // matches the rest of nanoclaw's strict-config posture.
+  const parsedModel = parseModel(ctx.model);
+  const effectiveInternalProvider = parsedModel.provider ?? dotenv.AMPLIFIER_AGENT_INTERNAL_PROVIDER;
+  if (effectiveInternalProvider) {
+    env.AMPLIFIER_AGENT_INTERNAL_PROVIDER = effectiveInternalProvider;
   }
 
   // Write host_config.json (turn-key host policy file). The amplifier-agent
-  // wrapper (amplifier-agent-ts >= 0.6.1) forwards this file to the engine
+  // wrapper (amplifier-agent-ts >= 0.7.0) forwards this file to the engine
   // via `--config <path>`; the engine reads `provider.module`,
-  // `approval.mode`, and `allowProtocolSkew` from it. The container-side
-  // provider (container/agent-runner/src/providers/amplifier-agent.ts)
-  // sets `approval: { mode: 'prompt' }` in spawnConfig so the engine's
+  // `provider.config`, `approval.mode`, and `allowProtocolSkew` from it.
+  // The container-side provider
+  // (container/agent-runner/src/providers/amplifier-agent.ts) sets
+  // `approval: { mode: 'prompt' }` in spawnConfig so the engine's
   // host_config.approval.mode actually governs the headless turn -- the
   // wrapper's default `-y` flag would otherwise outrank the file.
-  // (See amplifier-agent-ts argv-builder.js:54-63 and the engine's
-  // single_turn._resolve_approval_mode at v0.4.0 caa9d45.)
   //
-  // File lives at the existing per-agent-group bind-mount root, so it
-  // surfaces inside the container at
-  // /home/node/.local/state/amplifier-agent/host_config.json. NO new
-  // mount needed. NO credentials in this file -- the engine's host_config
-  // schema doesn't accept them; provider keys stay in env (above).
+  // PATH: Engine v0.6.0 unified storage under ~/.amplifier-agent/, with
+  // host config living at ~/.amplifier-agent/config/host_config.json. The
+  // bind mount surfaces $DATA_DIR/amplifier-agent/<id>/ as the container's
+  // ~/.amplifier-agent/, so we write the file at <hostPath>/config/
+  // host_config.json. NO new mount needed. NO credentials in this file --
+  // the engine's host_config schema doesn't accept them; provider keys
+  // stay in env (above).
   //
-  // `provider.module` is included as a declarative mirror; the engine's
-  // precedence puts inline `--provider` (which the container sets via
-  // spawnConfig.providerOverride) ABOVE host_config.provider.module.
-  // The container intentionally keeps providerOverride inline so provider
-  // selection does not depend on file I/O. The file value becomes the
-  // fallback if inline override is ever dropped, and it's the seam for
-  // future provider.config (model name, base URL) tuning.
-  if (internalProvider) {
+  // PROVIDER SELECTION (v0.6.0): The `--provider` CLI flag and the
+  // wrapper's `providerOverride` field were both removed (PR #49). Provider
+  // selection now lives EXCLUSIVELY in host_config.provider.module -- this
+  // file is the single source of truth, not a fallback. `provider.config`
+  // is the seam for model/effort/temperature tuning; the engine forwards
+  // it verbatim into the provider module's mount plan.
+  if (effectiveInternalProvider) {
+    // Forward container.json's model / effort fields into the engine via
+    // host_config.provider.config. The engine's single_turn.py reads this
+    // dict and folds it into the provider module's mount-plan config
+    // (key names are `default_model` and `effort` -- see amplifier-agent
+    // src/amplifier_agent_cli/provider_sources.py:build_provider_entry).
+    // Provider modules then decide what to do with each key; an unknown
+    // key is silently ignored at the module level.
+    //
+    // `parsedModel.model` is the model name WITH any `<provider>:` prefix
+    // already stripped (see parseModel above). If --model was bare, this
+    // is the raw user input; if it had a prefix, the prefix has been
+    // promoted into `effectiveInternalProvider` and is not duplicated
+    // into `default_model`.
+    //
+    // We only include keys that are actually set so the file stays minimal
+    // (provider modules fall back to their own catalog defaults otherwise).
+    const providerConfig: Record<string, string> = {};
+    if (parsedModel.model) providerConfig.default_model = parsedModel.model;
+    if (ctx.effort) providerConfig.effort = ctx.effort;
+
     const hostConfig = {
-      provider: { module: internalProvider },
+      provider: {
+        module: effectiveInternalProvider,
+        ...(Object.keys(providerConfig).length > 0 ? { config: providerConfig } : {}),
+      },
       approval: { mode: 'yes' as const },
       allowProtocolSkew: false,
     };
-    fs.writeFileSync(path.join(hostPath, 'host_config.json'), JSON.stringify(hostConfig, null, 2) + '\n', {
+    const configDir = path.join(hostPath, 'config');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, 'host_config.json'), JSON.stringify(hostConfig, null, 2) + '\n', {
       encoding: 'utf-8',
       mode: 0o644,
     });
@@ -143,7 +227,7 @@ export function buildAmplifierAgentContainerConfig(ctx: ProviderContainerContext
     mounts: [
       {
         hostPath,
-        containerPath: '/home/node/.local/state/amplifier-agent',
+        containerPath: '/home/node/.amplifier-agent',
         readonly: false,
       },
     ],

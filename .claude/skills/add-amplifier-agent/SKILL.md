@@ -184,19 +184,20 @@ USER root
 # Pre-create runtime state dirs and chmod world-writable. NC's container
 # runner spawns the container under the host UID (Docker Desktop on macOS
 # maps the host UID into the container), which differs from the build-time
-# `node` UID. The engine writes to .local/state, .cache, .config, and
-# .amplifier/cache regardless of which UID is actually running.
+# `node` UID.
+#
+# Engine v0.6.0 unified its storage tree under ~/.amplifier-agent/, replacing
+# the XDG layout from v0.5.x. The single env var AMPLIFIER_AGENT_HOME
+# overrides this root (old XDG_* vars are no longer consulted). See the
+# amplifier-agent design doc 2026-06-11-drop-xdg-and-flag-cleanup.md.
 RUN mkdir -p \
-        /home/node/.local/state/amplifier-agent/sessions \
-        /home/node/.cache/amplifier-agent \
-        /home/node/.config/amplifier-agent \
-        /home/node/.local/share/amplifier-agent \
+        /home/node/.amplifier-agent/state/workspaces \
+        /home/node/.amplifier-agent/cache \
+        /home/node/.amplifier-agent/config \
         /home/node/.amplifier/cache && \
-    chown -R node:node /home/node/.local /home/node/.cache /home/node/.config /home/node/.amplifier && \
+    chown -R node:node /home/node/.amplifier-agent /home/node/.amplifier && \
     chmod -R 0777 \
-        /home/node/.local \
-        /home/node/.cache \
-        /home/node/.config \
+        /home/node/.amplifier-agent \
         /home/node/.amplifier \
         /opt/uv
 USER node
@@ -268,7 +269,7 @@ sqlite3 -header data/v2.db "
 - **Bundle cache population:** containers skip the expensive `amplifier-agent prepare` during image build (to avoid permission issues with the `node` user). The prepare step runs automatically on first message to a group, or can be triggered explicitly via `amplifier-agent prepare` inside the container. Caching is per-group at `$DATA_DIR/amplifier-agent/<group-id>/`, so hot starts avoid the clone penalty.
 - **B1 buffer chaining (not steering):** the host adapter advertises `supports_steering: false`. Mid-turn `push()` calls queue and drain between turns. CR-4 caps the queue at 256 messages; overflow surfaces a `progress` event.
 - **Approvals auto-accepted:** Mode A v2 rejects `approval.onRequest` with `AaaError(approval_not_supported_in_v1)`. The host adapter intentionally does not pass the callback. In-container actions are auto-approved (the container is the sandbox). Host-level approvals (channel registration, unknown-sender policy) run in NanoClaw's router before the provider is invoked — they continue to work unchanged.
-- **Per-group transcript persistence:** `$DATA_DIR/amplifier-agent/<group-id>/` is bind-mounted at `/home/node/.local/state/amplifier-agent/` so transcripts and session metadata survive container restarts.
+- **Per-group transcript persistence:** `$DATA_DIR/amplifier-agent/<group-id>/` is bind-mounted at `/home/node/.amplifier-agent/` so transcripts, session metadata, host config, and bundle cache survive container restarts. (Engine v0.6.0 unified the XDG layout into this single root.)
 - **Q10 lazy-prepare retry:** if the engine reports `engine_not_primed`, the adapter runs `amplifier-agent prepare` synchronously and retries the spawn once. This handles any cache misses from previous restarts.
 
 ## Verify

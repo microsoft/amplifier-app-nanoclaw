@@ -216,6 +216,14 @@ provision:
       cat > /home/nano/nanoclaw/.env <<EOF
       NANOCLAW_DEFAULT_PROVIDER=amplifier-agent
       AMPLIFIER_AGENT_INTERNAL_PROVIDER=${INTERNAL_PROVIDER}
+      # Persist agent-container stdout+stderr to disk under
+      # /home/nano/nanoclaw/logs/containers/<group>/<container>.log
+      # for post-mortem inspection of engine boot, host_config.json
+      # loading, and per-turn provider/model resolution. Off by default
+      # in nanoclaw; opted in here so the DTU is a useful debugging
+      # surface for the amplifier-agent backend. See PR #7 in
+      # microsoft/amplifier-app-nanoclaw for the implementation.
+      NANOCLAW_CONTAINER_LOGS=enabled
       EOF
       case "${INTERNAL_PROVIDER}" in
         anthropic)

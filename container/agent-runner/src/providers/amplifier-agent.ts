@@ -45,15 +45,19 @@ export const AMPLIFIER_AGENT_BUFFER_CAP = 256;
 
 /**
  * Path to the host-policy file that the wrapper forwards to the engine via
- * `--config <path>` (amplifier-agent-ts >= 0.6.1). The file is written
+ * `--config <path>` (amplifier-agent-ts >= 0.7.0). The file is written
  * per-agent-group by the HOST-side provider container config
  * (src/providers/amplifier-agent.ts in the nanoclaw repo root) into the
- * existing bind-mount at /home/node/.local/state/amplifier-agent/, so we
- * read it at this in-container path. Engine reads `provider.module`,
- * `approval.mode`, and `allowProtocolSkew` from it. See the host-side
- * file writer for schema, precedence, and security notes.
+ * existing bind-mount at /home/node/.amplifier-agent/, so we read it at
+ * this in-container path. Engine reads `provider.module` (REQUIRED in
+ * v0.6.0 since the `--provider` CLI flag was removed), `provider.config`
+ * (model, effort, etc.), `approval.mode`, and `allowProtocolSkew` from it.
+ * See the host-side file writer for schema, precedence, and security notes.
+ *
+ * Engine v0.6.0 moved storage to ~/.amplifier-agent/{state,cache,config}/.
+ * host_config.json now lives in the `config/` subdir of that root.
  */
-const HOST_CONFIG_PATH = '/home/node/.local/state/amplifier-agent/host_config.json';
+const HOST_CONFIG_PATH = '/home/node/.amplifier-agent/config/host_config.json';
 
 /** Stale-session detection. AaaError codes OR plain-text fallback. */
 const STALE_SESSION_RE = /session_not_found|stale_session|invalid_session|session.*not found/i;
@@ -236,14 +240,25 @@ class AmplifierAgentQuery implements AgentQuery {
             approval: { mode: 'prompt' },
           };
 
-          // Set provider override and env allowlist based on internal provider.
-          // The wrapper's DEFAULT_ALLOWLIST (PATH/HOME/USER/LANG/TERM/TMPDIR) is
-          // not exported and gets replaced — not extended — when env.allowlist
-          // is set, so we inline those names alongside the credential vars.
-          // Without HOME the Python engine throws RuntimeError from Path.home()
-          // and exits before emitting a §4.1 envelope.
+          // Build env allowlist based on internal provider.
+          //
+          // PROVIDER SELECTION (v0.7.0+): The wrapper's `providerOverride`
+          // field and the engine's `--provider` CLI flag were both REMOVED
+          // in engine v0.6.0 / wrapper v0.7.0 (PR #49). Provider selection
+          // now lives exclusively in host_config.json's `provider.module`
+          // field, which the HOST-side provider has pre-staged at
+          // HOST_CONFIG_PATH and which the engine reads via `--config`.
+          // AMPLIFIER_AGENT_INTERNAL_PROVIDER is still consulted here to
+          // decide which credential env vars to allow into the engine
+          // subprocess, but it no longer drives provider routing.
+          //
+          // ENV ALLOWLIST: The wrapper's DEFAULT_ALLOWLIST
+          // (PATH/HOME/USER/LANG/TERM/TMPDIR) gets replaced — not extended —
+          // when env.allowlist is set, so we inline those names alongside
+          // the credential vars. Without HOME the Python engine throws
+          // RuntimeError from Path.home() and exits before emitting a §4.1
+          // envelope.
           if (internalProvider) {
-            spawnConfig.providerOverride = internalProvider;
             const credentialsMap: Record<string, string[]> = {
               anthropic: ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN'],
               openai: ['OPENAI_API_KEY'],
