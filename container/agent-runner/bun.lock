@@ -7,7 +7,7 @@
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.2.128",
         "@modelcontextprotocol/sdk": "^1.12.1",
-        "amplifier-agent-ts": "^0.6.1",
+        "amplifier-agent-ts": "^0.7.0",
         "cron-parser": "^5.0.0",
         "zod": "^4.0.0",
       },
@@ -55,7 +55,7 @@
 
     "ajv-formats": ["ajv-formats@3.0.1", "", { "dependencies": { "ajv": "^8.0.0" } }, "sha512-8iUql50EUR+uUcdRQ3HDqa6EVyo3docL8g5WJ3FNcWmu62IbkGUue/pEyLBW8VGKKucTPgqeks4fIU1DA4yowQ=="],
 
-    "amplifier-agent-ts": ["amplifier-agent-ts@0.6.1", "", {}, "sha512-Csj2sZ7T3YXftTJ6cT3fWtLhxBJBgv0JOsaDgTXJuFHBdnrb6YHzbDYhDRuIahdXeDkR0/LgNujoySq/1hLg8w=="],
+    "amplifier-agent-ts": ["amplifier-agent-ts@0.7.0", "", {}, "sha512-kDUxW67EB3OHcmOQABG0kz9FjnNsJh2OdIP0l+tnB0hYprRJuoCf2xc4aCHLm7SbsFSv+fVFIXuD7IyRh1ndaA=="],
 
     "body-parser": ["body-parser@2.2.2", "", { "dependencies": { "bytes": "^3.1.2", "content-type": "^1.0.5", "debug": "^4.4.3", "http-errors": "^2.0.0", "iconv-lite": "^0.7.0", "on-finished": "^2.4.1", "qs": "^6.14.1", "raw-body": "^3.0.1", "type-is": "^2.0.1" } }, "sha512-oP5VkATKlNwcgvxi0vM0p/D3n2C3EReYVX+DNYs5TjZFn/oQt2j+4sVJtSMr18pdRr8wjTcBl6LoV+FUwzPmNA=="],
 

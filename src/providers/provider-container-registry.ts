@@ -29,6 +29,24 @@ export interface ProviderContainerContext {
   agentGroupId: string;
   /** `process.env` at spawn time — pull passthrough values from here. */
   hostEnv: NodeJS.ProcessEnv;
+  /**
+   * Model override from container.json (or DB `container_configs.model`).
+   * Provider-specific identifier (e.g. `claude-sonnet-4-5`, `gpt-5`,
+   * `llama3.2`). Provider container-config functions decide whether to
+   * honor it; some forward it to a config file (amplifier-agent's
+   * `host_config.provider.config.default_model`), others may use env
+   * vars or simply ignore it. `undefined` means "use provider default".
+   */
+  model?: string;
+  /**
+   * Reasoning effort override from container.json (or DB
+   * `container_configs.effort`). Free-form string; providers that
+   * understand it interpret it on their own. For amplifier-agent it's
+   * forwarded as `host_config.provider.config.effort` and each provider
+   * module decides what values it accepts (e.g. `high`/`medium`/`low`).
+   * `undefined` means "use provider default".
+   */
+  effort?: string;
 }
 
 export interface ProviderContainerContribution {

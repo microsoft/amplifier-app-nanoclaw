@@ -20,11 +20,16 @@ ARG INSTALL_CJK_FONTS=false
 # mean every rebuild silently picks up the latest and can break in lockstep
 # across all users.
 ARG CLAUDE_CODE_VERSION=2.1.128
-# Pinned to v0.5.1 (main HEAD as of 2026-06-04) by SHA rather than tag.
-# No engine-v* tag has been published since engine-v0.3.0; engine versions
-# 0.4.x and 0.5.x are tracked via pyproject.toml bumps inside commits.
-# 0c69c88 corresponds to "fix(bundle): unmount hooks-approval from default mount (v0.5.1)".
-ARG AMPLIFIER_AGENT_REF=0c69c88b36217cd395e937fc97f5ce246bc02887
+# Pinned to v0.6.0 (engine) / wrapper v0.7.0 by SHA. Both tags point at the
+# same commit (the release bump in #55).
+# dc535ac corresponds to "chore(release): bump engine to 0.6.0 and TS wrapper
+# to 0.7.0 (#55)". Major v0.6.0 changes: XDG storage layout dropped in favor
+# of unified ~/.amplifier-agent/{state,cache,config}/; --provider CLI flag
+# removed (provider selection moves to host_config.json); auto-migration
+# replaced by user-invoked `amplifier-agent migrate`; --output default flipped
+# from json to text (irrelevant here since the wrapper hardcodes --output
+# json). See amplifier-agent docs/designs/2026-06-11-drop-xdg-and-flag-cleanup.md.
+ARG AMPLIFIER_AGENT_REF=dc535ac04948a4b4804b0c2bd7ec29e920b0dd68
 ARG AGENT_BROWSER_VERSION=latest
 ARG VERCEL_VERSION=52.2.1
 ARG BUN_VERSION=1.3.12
@@ -157,20 +162,32 @@ WORKDIR /workspace/group
 # Pre-create runtime state dirs and chmod world-writable. NC's container
 # runner spawns the container under the host UID (Docker Desktop on macOS
 # maps the host UID into the container), which differs from the build-time
-# `node` UID. The engine writes to .local/state, .cache, .config, and
-# .amplifier/cache regardless of which UID is actually running.
+# `node` UID.
+#
+# Engine v0.6.0 dropped XDG paths. State now lives under a single root:
+#   ~/.amplifier-agent/state/    sessions, transcripts, workspaces
+#   ~/.amplifier-agent/cache/    prepared bundle cache
+#   ~/.amplifier-agent/config/   host_config.json
+# Override via AMPLIFIER_AGENT_HOME=<path> (single env var; old XDG_* vars
+# are no longer consulted). See amplifier-agent design doc
+# `docs/designs/2026-06-11-drop-xdg-and-flag-cleanup.md`.
+#
+# The HOST-side amplifier-agent provider bind-mounts a per-agent-group host
+# dir at /home/node/.amplifier-agent/, so once running these pre-created
+# subdirs are masked by the mount. The mkdir+chmod still matters for:
+#   (a) image-only runs with no bind mount,
+#   (b) ensuring parent ownership/perms when Docker creates the mount.
+# /home/node/.amplifier/cache is retained for bundle install machinery that
+# still lives under the legacy .amplifier path during `amplifier-agent prepare`.
 USER root
 RUN mkdir -p \
-        /home/node/.local/state/amplifier-agent/sessions \
-        /home/node/.cache/amplifier-agent \
-        /home/node/.config/amplifier-agent \
-        /home/node/.local/share/amplifier-agent \
+        /home/node/.amplifier-agent/state/workspaces \
+        /home/node/.amplifier-agent/cache \
+        /home/node/.amplifier-agent/config \
         /home/node/.amplifier/cache && \
-    chown -R node:node /home/node/.local /home/node/.cache /home/node/.config /home/node/.amplifier && \
+    chown -R node:node /home/node/.amplifier-agent /home/node/.amplifier && \
     chmod -R 0777 \
-        /home/node/.local \
-        /home/node/.cache \
-        /home/node/.config \
+        /home/node/.amplifier-agent \
         /home/node/.amplifier \
         /opt/uv
 USER node
