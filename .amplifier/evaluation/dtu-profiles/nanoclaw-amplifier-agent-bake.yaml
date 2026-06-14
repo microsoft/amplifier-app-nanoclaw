@@ -366,6 +366,36 @@ provision:
           --provider amplifier-agent
       '
 
+    # ── 13b. Pin agent model if eval MODEL var is set ──
+    # When run.sh passes --var MODEL=<X>, configure the agent group's
+    # container_config to use that model via the v0.6.0 colon-prefix
+    # mechanism. Host-side amplifier-agent.ts parses `anthropic:<X>`
+    # into host_config.provider.module = "anthropic" and
+    # host_config.provider.config.default_model = "<X>", which the
+    # engine forwards to the provider module.
+    #
+    # Agent ID is auto-generated, but there's only ever one CLI agent
+    # in a fresh nanoclaw install -- query `groups list --json` to find
+    # it. Skipped if MODEL is unset; provider catalog default is used.
+    - |
+      if [ -n "${MODEL}" ]; then
+        runuser -u nano -- env HOME=/home/nano PATH="/home/nano/.local/bin:/usr/local/bin:/usr/bin:/bin" bash -c "
+          cd /home/nano/nanoclaw
+          AGENT_ID=\$(pnpm ncl groups list --json 2>/dev/null | python3 -c 'import json,sys,re
+raw=sys.stdin.read()
+# strip pnpm preamble lines that arent JSON
+start=raw.find(\"[\")
+if start<0: start=raw.find(\"{\")
+data=json.loads(raw[start:])
+rows=data if isinstance(data,list) else data.get(\"rows\",[])
+print(rows[0][\"id\"])')
+          echo \"configuring agent \$AGENT_ID with model anthropic:${MODEL}\"
+          pnpm ncl groups config update --id \"\$AGENT_ID\" --model \"anthropic:${MODEL}\"
+        "
+      else
+        echo "MODEL var not set; amplifier-agent will use provider catalog default"
+      fi
+
     # ── 14. Sanity check ──
     - |
       echo "nanoclaw process: $(cat /home/nano/nanoclaw/nanoclaw.pid)"

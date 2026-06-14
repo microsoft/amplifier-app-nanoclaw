@@ -156,8 +156,21 @@ provision:
     # the start. The sha1(cwd)[:8] Docker image name changes vs /root/nanoclaw
     # but on a fresh DTU there is no cached image anyway.
     - |
-      REPO="${NANOCLAW_REPO:-https://github.com/manojp99/amplifier-app-nanoclaw.git}"
-      REF="${NANOCLAW_REF:-master}"
+      # NANOCLAW_REPO and NANOCLAW_REF are populated by DTU's --var
+      # substitution, which ONLY replaces bare ${VAR} -- it does not
+      # expand shell parameter expansion like ${VAR:-default}. Previously
+      # this block used ${NANOCLAW_REF:-master} directly, which DTU left
+      # literal so --var NANOCLAW_REF=... was silently ignored and every
+      # launch cloned manojp99/master regardless. The fix: receive the
+      # values into bare-${VAR} bash assignments (so DTU's substitution
+      # kicks in), then apply defaults via bash's :- operator afterward
+      # to handle the no--var case. Mirrors the fix already applied to
+      # nanoclaw-amplifier-agent.yaml.
+      REPO="${NANOCLAW_REPO}"
+      REF="${NANOCLAW_REF}"
+      REPO="${REPO:-https://github.com/manojp99/amplifier-app-nanoclaw.git}"
+      REF="${REF:-master}"
+      echo "cloning ${REPO}@${REF}"
       runuser -u nano -- env HOME=/home/nano bash -c "
         git clone --depth 1 --branch '$REF' '$REPO' /home/nano/nanoclaw \
           || git clone --depth 1 '$REPO' /home/nano/nanoclaw

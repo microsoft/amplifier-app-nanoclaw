@@ -162,8 +162,21 @@ provision:
     # the start. The sha1(cwd)[:8] Docker image name changes vs /root/nanoclaw
     # but on a fresh DTU there is no cached image anyway.
     - |
-      REPO="${NANOCLAW_REPO:-https://github.com/microsoft/amplifier-app-nanoclaw.git}"
-      REF="${NANOCLAW_REF:-main}"
+      # NANOCLAW_REPO and NANOCLAW_REF are populated by DTU's --var
+      # substitution, which ONLY replaces bare ${VAR} -- it does not
+      # expand shell parameter expansion like ${VAR:-default}. Previously
+      # this block used ${NANOCLAW_REF:-main} directly, which DTU left
+      # literal so --var NANOCLAW_REF=... was silently ignored and every
+      # launch cloned microsoft/main regardless. The fix: receive the
+      # values into bare-${VAR} bash assignments (so DTU's substitution
+      # kicks in), then apply defaults via bash's :- operator afterward
+      # to handle the no--var case. Mirrors the fix already applied to
+      # nanoclaw-amplifier-agent-bake.yaml.
+      REPO="${NANOCLAW_REPO}"
+      REF="${NANOCLAW_REF}"
+      REPO="${REPO:-https://github.com/microsoft/amplifier-app-nanoclaw.git}"
+      REF="${REF:-main}"
+      echo "cloning ${REPO}@${REF}"
       runuser -u nano -- env HOME=/home/nano bash -c "
         git clone --depth 1 --branch '$REF' '$REPO' /home/nano/nanoclaw \
           || git clone --depth 1 '$REPO' /home/nano/nanoclaw
@@ -241,6 +254,32 @@ provision:
       mount -t tmpfs -o size=2G,uid=1000,gid=1000,mode=0755 tmpfs /home/nano/nanoclaw/data/v2-sessions
       echo "── v2-sessions filesystem: ──"
       df -T /home/nano/nanoclaw/data/v2-sessions
+
+    # ── 9c. Pin ANTHROPIC_MODEL if eval MODEL var is set ──
+    # When run.sh passes --var MODEL=<X>, write ANTHROPIC_MODEL=<X> to
+    # .env. The host-side claude provider (src/providers/claude.ts)
+    # reads ANTHROPIC_MODEL from .env and forwards it as an env var to
+    # the agent container, where the Claude Agent SDK respects it.
+    # This is the install-wide equivalent of amplifier-agent's per-agent
+    # --model anthropic:X. Used so eval comparisons across agents can
+    # pin both to the same model. Skipped if MODEL is unset.
+    - |
+      if [ -n "${MODEL}" ]; then
+        touch /home/nano/nanoclaw/.env
+        chown nano:nano /home/nano/nanoclaw/.env
+        runuser -u nano -- bash -c "
+          cd /home/nano/nanoclaw
+          if grep -q '^ANTHROPIC_MODEL=' .env; then
+            sed -i 's|^ANTHROPIC_MODEL=.*|ANTHROPIC_MODEL=${MODEL}|' .env
+          else
+            echo 'ANTHROPIC_MODEL=${MODEL}' >> .env
+          fi
+          echo 'pinned ANTHROPIC_MODEL in .env:'
+          grep '^ANTHROPIC_MODEL=' .env
+        "
+      else
+        echo "MODEL var not set; claude will use SDK default"
+      fi
 
     # ── 10. Start the nanoclaw service ──
     # Same pattern as the amplifier-agent profile: skip the systemd

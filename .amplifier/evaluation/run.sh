@@ -79,6 +79,20 @@ for k, v in (m.get("launch_vars") or {}).items():
 PY
 )
 
+  # Optional MODEL env var → bake-time --var MODEL=X. Used to pin the
+  # agent's model for fair-comparison runs (e.g. claude vs amplifier-agent
+  # on claude-opus-4-8). When set:
+  #   * claude bake writes ANTHROPIC_MODEL=$MODEL to .env (forwarded into
+  #     the agent container by the host-side claude provider)
+  #   * amplifier-agent bake configures the agent group with
+  #     `--model anthropic:$MODEL` (parsed by the v0.6.0 colon-prefix
+  #     parser into host_config.provider.config.default_model)
+  # Unset → both agents use their default model selection.
+  if [ -n "${MODEL:-}" ]; then
+    echo "  pinning agent model to: $MODEL"
+    VARARGS+=("--var" "MODEL=$MODEL")
+  fi
+
   # Clean up the half-baked build container if anything below fails.
   bake_cleanup() { incus delete --force "$BUILD" >/dev/null 2>&1 || true; }
   trap bake_cleanup ERR
