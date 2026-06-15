@@ -44,37 +44,45 @@ import {
 const VALID_INTERNAL_PROVIDERS = new Set(['anthropic', 'openai', 'azure-openai', 'ollama']);
 
 /**
- * Parse the `model` field from container.json into an optional provider
- * prefix and a model name.
+ * Parse a `<provider>:<model>` spec into its two parts. Both the per-agent-
+ * group `--model` field (container.json) and the install-wide
+ * AMPLIFIER_AGENT_MODEL env use this identical format.
  *
- *   "claude-sonnet-4-5"             -> { model: "claude-sonnet-4-5" }
- *   "anthropic:claude-sonnet-4-5"   -> { provider: "anthropic", model: "claude-sonnet-4-5" }
+ * A provider prefix AND a non-empty model name are BOTH required — there is
+ * no bare-model or backend-only form. Provider selection travels *with* the
+ * model so a backend and a model name can never come from two separate knobs
+ * and disagree. (The former bare-model fallback onto a standalone
+ * AMPLIFIER_AGENT_INTERNAL_PROVIDER env was removed for exactly that reason.)
+ *
+ *   "anthropic:claude-opus-4-8"     -> { provider: "anthropic", model: "claude-opus-4-8" }
  *   "ollama:llama3.2:latest"        -> { provider: "ollama",    model: "llama3.2:latest" }
  *                                       (first-colon split lets ollama tags survive)
- *   "claud:foo"                     -> throws (strict: unknown prefix)
+ *   "claude-opus-4-8"               -> throws (no provider prefix)
+ *   "claud:foo"                     -> throws (unknown prefix)
  *   "anthropic:"                    -> throws (empty model name)
  *
- * Bare strings (no colon) are returned verbatim as the model name, letting
- * the caller fall back to the install-wide AMPLIFIER_AGENT_INTERNAL_PROVIDER
- * for provider selection. A prefix is only recognized when it matches a
- * known internal provider; anything else fails fast so typos can't silently
- * be treated as model names.
+ * Returns {} only for an unset (empty/undefined) input. `source` names the
+ * knob in error messages so a bad env value doesn't blame `--model`.
  */
-function parseModel(raw: string | undefined): { provider?: string; model?: string } {
+function parseModel(raw: string | undefined, source = '--model'): { provider?: string; model?: string } {
   if (!raw) return {};
   const idx = raw.indexOf(':');
-  if (idx === -1) return { model: raw };
+  if (idx === -1) {
+    throw new Error(
+      `Invalid ${source} value "${raw}": expected "<provider>:<model>" ` +
+        `(e.g. "anthropic:claude-opus-4-8"). Valid providers: ${[...VALID_INTERNAL_PROVIDERS].join(', ')}.`,
+    );
+  }
   const prefix = raw.slice(0, idx);
   const rest = raw.slice(idx + 1);
   if (!VALID_INTERNAL_PROVIDERS.has(prefix)) {
     throw new Error(
-      `Invalid --model value "${raw}": unknown internal-provider prefix "${prefix}". ` +
-        `Valid prefixes: ${[...VALID_INTERNAL_PROVIDERS].join(', ')}. ` +
-        `Use a bare model name (no colon) to fall back to AMPLIFIER_AGENT_INTERNAL_PROVIDER from .env.`,
+      `Invalid ${source} value "${raw}": unknown provider prefix "${prefix}". ` +
+        `Valid providers: ${[...VALID_INTERNAL_PROVIDERS].join(', ')}.`,
     );
   }
   if (!rest) {
-    throw new Error(`Invalid --model value "${raw}": empty model name after "${prefix}:".`);
+    throw new Error(`Invalid ${source} value "${raw}": empty model name after "${prefix}:".`);
   }
   return { provider: prefix, model: rest };
 }
@@ -93,7 +101,7 @@ export function buildAmplifierAgentContainerConfig(ctx: ProviderContainerContext
     'AZURE_OPENAI_ENDPOINT',
     'AZURE_OPENAI_API_VERSION',
     'OLLAMA_BASE_URL',
-    'AMPLIFIER_AGENT_INTERNAL_PROVIDER',
+    'AMPLIFIER_AGENT_MODEL',
   ]);
 
   const env: Record<string, string> = {
@@ -105,24 +113,35 @@ export function buildAmplifierAgentContainerConfig(ctx: ProviderContainerContext
     GIT_SSL_NO_VERIFY: '1',
   };
 
-  // Resolve the effective LLM backend for THIS agent group.
+  // Resolve the effective LLM backend + model for THIS agent group.
   //
-  // Two sources, in priority order:
-  //   1. A `<provider>:` prefix on the `--model` field in container.json.
-  //      Lets a user run `--model anthropic:claude-sonnet-4-5` to opt
-  //      this group onto Anthropic, independently of any other group.
-  //   2. AMPLIFIER_AGENT_INTERNAL_PROVIDER from .env -- the install-wide
-  //      fallback for groups that haven't overridden their model with a
-  //      prefix. (Read from .env because the service process does not
-  //      load .env into process.env; see src/env.ts header comment.)
+  // Single source of truth, two scopes (mirrors the Claude provider's
+  // `--model` / ANTHROPIC_MODEL split):
+  //   1. Per-group `--model` in container.json -- overrides everything.
+  //   2. AMPLIFIER_AGENT_MODEL from .env -- the install-wide default.
+  //      (Read from .env because the service process does not load .env into
+  //      process.env; see src/env.ts header comment.)
   //
-  // If neither source provides a provider, we pass nothing to the container
-  // and the engine will fail at first turn with a clear "no provider
-  // selected" error. That's louder than silently picking a default, which
-  // matches the rest of nanoclaw's strict-config posture.
-  const parsedModel = parseModel(ctx.model);
-  const effectiveInternalProvider = parsedModel.provider ?? dotenv.AMPLIFIER_AGENT_INTERNAL_PROVIDER;
+  // Both use the same "<provider>:<model>" format and parseModel guarantees
+  // provider+model both-or-neither, so the per-field `??` below is effectively
+  // atomic: a group either fully overrides the install-wide spec or inherits
+  // all of it. There is no standalone backend knob anymore -- provider and
+  // model always travel together so they can't drift apart.
+  //
+  // If neither scope provides a value, we pass nothing to the container and
+  // the engine fails at first turn with a clear "no provider selected" error.
+  // That's louder than silently picking a default, which matches the rest of
+  // nanoclaw's strict-config posture.
+  const perGroup = parseModel(ctx.model);
+  const installWide = parseModel(dotenv.AMPLIFIER_AGENT_MODEL, 'AMPLIFIER_AGENT_MODEL');
+  const effectiveInternalProvider = perGroup.provider ?? installWide.provider;
+  const effectiveModel = perGroup.model ?? installWide.model;
   if (effectiveInternalProvider) {
+    // Forwarded to the container as AMPLIFIER_AGENT_INTERNAL_PROVIDER. This is
+    // NOT an operator knob anymore -- it's the internal host->container wire
+    // the container reads to pick which credential env vars to allow into the
+    // engine subprocess (container/agent-runner/src/providers/amplifier-agent.ts).
+    // Provider ROUTING lives in host_config.provider.module (written below).
     env.AMPLIFIER_AGENT_INTERNAL_PROVIDER = effectiveInternalProvider;
   }
 
@@ -159,16 +178,16 @@ export function buildAmplifierAgentContainerConfig(ctx: ProviderContainerContext
     // Provider modules then decide what to do with each key; an unknown
     // key is silently ignored at the module level.
     //
-    // `parsedModel.model` is the model name WITH any `<provider>:` prefix
-    // already stripped (see parseModel above). If --model was bare, this
-    // is the raw user input; if it had a prefix, the prefix has been
-    // promoted into `effectiveInternalProvider` and is not duplicated
-    // into `default_model`.
+    // `effectiveModel` is the model name with the `<provider>:` prefix already
+    // stripped (see parseModel + resolution above) -- from the per-group
+    // `--model` if set, else the install-wide AMPLIFIER_AGENT_MODEL. The
+    // prefix itself was promoted into `effectiveInternalProvider` and is not
+    // duplicated into `default_model`.
     //
     // We only include keys that are actually set so the file stays minimal
     // (provider modules fall back to their own catalog defaults otherwise).
     const providerConfig: Record<string, string> = {};
-    if (parsedModel.model) providerConfig.default_model = parsedModel.model;
+    if (effectiveModel) providerConfig.default_model = effectiveModel;
     if (ctx.effort) providerConfig.effort = ctx.effort;
 
     const hostConfig = {

@@ -71,13 +71,46 @@ else
   # Mirror the agent's launch_vars (e.g. INTERNAL_PROVIDER, NANOCLAW_REPO/REF)
   # from meta.yaml so the baked image clones + configures the same source the
   # eval would. claude has none (uses profile defaults).
-  mapfile -t VARARGS < <(python3 - "$HERE/agents/$AGENT/meta.yaml" <<'PY'
+  #
+  # Uses while-read instead of `mapfile -t` because macOS ships bash 3.2 by
+  # default and `mapfile` is bash 4+. The script needs to run on a fresh
+  # Mac without `brew install bash`.
+  VARARGS=()
+  while IFS= read -r line; do
+    VARARGS+=("$line")
+  done < <(python3 - "$HERE/agents/$AGENT/meta.yaml" <<'PY'
 import sys, yaml
 m = yaml.safe_load(open(sys.argv[1])) or {}
 for k, v in (m.get("launch_vars") or {}).items():
     print("--var"); print(f"{k}={v}")
 PY
 )
+
+  # Optional MODEL env var → bake-time --var MODEL=X. Used to pin the
+  # agent's model for fair-comparison runs (e.g. claude vs amplifier-agent
+  # on claude-opus-4-8). When set:
+  #   * claude bake writes ANTHROPIC_MODEL=$MODEL to .env (forwarded into
+  #     the agent container by the host-side claude provider)
+  #   * amplifier-agent bake configures the agent group with
+  #     `--model anthropic:$MODEL` (parsed by the v0.6.0 colon-prefix
+  #     parser into host_config.provider.config.default_model)
+  # Unset → both agents use their default model selection.
+  if [ -n "${MODEL:-}" ]; then
+    echo "  pinning agent model to: $MODEL"
+    VARARGS+=("--var" "MODEL=$MODEL")
+  fi
+
+  # Optional NANOCLAW_REF / NANOCLAW_REPO env vars → forwarded as
+  # --var so the bake clones a specific branch instead of microsoft/main.
+  # Used when validating uncommitted-to-main patches in a real eval.
+  if [ -n "${NANOCLAW_REF:-}" ]; then
+    echo "  overriding nanoclaw ref: $NANOCLAW_REF"
+    VARARGS+=("--var" "NANOCLAW_REF=$NANOCLAW_REF")
+  fi
+  if [ -n "${NANOCLAW_REPO:-}" ]; then
+    echo "  overriding nanoclaw repo: $NANOCLAW_REPO"
+    VARARGS+=("--var" "NANOCLAW_REPO=$NANOCLAW_REPO")
+  fi
 
   # Clean up the half-baked build container if anything below fails.
   bake_cleanup() { incus delete --force "$BUILD" >/dev/null 2>&1 || true; }

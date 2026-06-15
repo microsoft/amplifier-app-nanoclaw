@@ -19,7 +19,7 @@ description: >
   and restarts the nanoclaw service. No Docker Hub pulls, no rebuild.
 
 base:
-  image: local:nanoclaw-golden-claude
+  image: nanoclaw-golden-claude
   config:
     security.nesting: "true"
     limits.memory: "16GiB"

@@ -114,9 +114,11 @@ tail -f logs/nanoclaw.log # Watch what's happening
 Edit `.env`:
 
 ```bash
-AMPLIFIER_AGENT_INTERNAL_PROVIDER=openai
+AMPLIFIER_AGENT_MODEL=openai:gpt-5
 OPENAI_API_KEY=sk-proj-...
 ```
+
+`AMPLIFIER_AGENT_MODEL` is a single `<provider>:<model>` knob (backend and model travel together so they can't drift). A per-agent-group `--model` overrides it.
 
 Then restart the NanoClaw service:
 

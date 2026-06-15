@@ -344,6 +344,7 @@ async function main(): Promise<void> {
     // If using amplifier-agent, prompt for internal provider and credentials
     if (provider === 'amplifier-agent') {
       const internalProvider = await askAmplifierAgentInternalProvider();
+      const internalModel = await askAmplifierAgentModel(internalProvider);
       const credentials = await askAmplifierAgentCredentials(internalProvider);
 
       if (credentials && Object.keys(credentials.envVars).length > 0) {
@@ -353,12 +354,12 @@ async function main(): Promise<void> {
         }
         // Set as default provider for all future agents (channels)
         writeEnvLine('NANOCLAW_DEFAULT_PROVIDER', 'amplifier-agent');
-        // Store which internal provider was selected
-        writeEnvLine('AMPLIFIER_AGENT_INTERNAL_PROVIDER', internalProvider);
+        // Install-wide backend + model as a single knob (provider:model).
+        writeEnvLine('AMPLIFIER_AGENT_MODEL', `${internalProvider}:${internalModel}`);
         p.log.message(
           brandBody(
             wrapForGutter(
-              `✓ Credentials written to .env for ${internalProvider}`,
+              `✓ Credentials written to .env for ${internalProvider}:${internalModel}`,
               4,
             ),
           ),
@@ -507,17 +508,18 @@ async function main(): Promise<void> {
         await resolveProvider();
         if (provider === 'amplifier-agent') {
           const internalProvider = await askAmplifierAgentInternalProvider();
+          const internalModel = await askAmplifierAgentModel(internalProvider);
           const credentials = await askAmplifierAgentCredentials(internalProvider);
           if (credentials && Object.keys(credentials.envVars).length > 0) {
             for (const [key, value] of Object.entries(credentials.envVars)) {
               writeEnvLine(key, value);
             }
             writeEnvLine('NANOCLAW_DEFAULT_PROVIDER', 'amplifier-agent');
-            writeEnvLine('AMPLIFIER_AGENT_INTERNAL_PROVIDER', internalProvider);
+            writeEnvLine('AMPLIFIER_AGENT_MODEL', `${internalProvider}:${internalModel}`);
             p.log.message(
               brandBody(
                 wrapForGutter(
-                  `✓ Credentials written to .env for ${internalProvider}`,
+                  `✓ Credentials written to .env for ${internalProvider}:${internalModel}`,
                   4,
                 ),
               ),
@@ -1271,6 +1273,31 @@ async function askAmplifierAgentInternalProvider(): Promise<string> {
   );
   setupLog.userInput('amplifier_agent_internal_provider', choice);
   return choice;
+}
+
+// Per-backend starting suggestions. These are editable prompt defaults, not
+// baked runtime defaults — amplifier-agent now requires an explicit model
+// (provider+model travel together as AMPLIFIER_AGENT_MODEL=<provider>:<model>),
+// so the operator must confirm/override a concrete model at setup time.
+const AMPLIFIER_AGENT_MODEL_SUGGESTIONS: Record<string, string> = {
+  anthropic: 'claude-sonnet-4-6',
+  openai: 'gpt-5',
+  'azure-openai': 'your-deployment-name',
+  ollama: 'llama3.2',
+};
+
+async function askAmplifierAgentModel(provider: string): Promise<string> {
+  const suggestion = AMPLIFIER_AGENT_MODEL_SUGGESTIONS[provider] ?? '';
+  const answer = ensureAnswer(
+    await p.text({
+      message: `Which ${provider} model should amplifier-agent use?`,
+      placeholder: suggestion,
+      initialValue: suggestion,
+    }),
+  );
+  const model = (answer as string).trim();
+  setupLog.userInput('amplifier_agent_model', model);
+  return model;
 }
 
 interface AmplifierAgentCredentials {

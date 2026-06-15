@@ -221,7 +221,7 @@ provision:
     - |
       cat > /home/nano/nanoclaw/.env <<EOF
       NANOCLAW_DEFAULT_PROVIDER=amplifier-agent
-      AMPLIFIER_AGENT_INTERNAL_PROVIDER=${INTERNAL_PROVIDER}
+      AMPLIFIER_AGENT_MODEL=${INTERNAL_PROVIDER}:${MODEL}
       EOF
       case "${INTERNAL_PROVIDER}" in
         anthropic)
@@ -366,11 +366,19 @@ provision:
           --provider amplifier-agent
       '
 
+    # NOTE: the agent model is pinned install-wide via AMPLIFIER_AGENT_MODEL
+    # in .env (step 5), seeded before the service starts. Both backend and
+    # model travel together as ${INTERNAL_PROVIDER}:${MODEL}, so there is no
+    # separate per-group ncl pin step anymore. MODEL is now REQUIRED — with
+    # it unset the .env value is "${INTERNAL_PROVIDER}:" and the engine fails
+    # loudly at first spawn (amplifier-agent has no catalog-default fallback
+    # under the always-explicit model contract).
+
     # ── 14. Sanity check ──
     - |
       echo "nanoclaw process: $(cat /home/nano/nanoclaw/nanoclaw.pid)"
       ls -la /home/nano/nanoclaw/data/cli.sock /home/nano/nanoclaw/data/ncl.sock /home/nano/nanoclaw/data/v2.db
-      grep -E "^NANOCLAW_DEFAULT_PROVIDER|^AMPLIFIER_AGENT_INTERNAL_PROVIDER" /home/nano/nanoclaw/.env
+      grep -E "^NANOCLAW_DEFAULT_PROVIDER|^AMPLIFIER_AGENT_MODEL" /home/nano/nanoclaw/.env
       echo "nano uid: $(id -u nano) — agent container USER node uid: 1000 — match: OK"
 
     # ── 15. Freeze for golden image ──

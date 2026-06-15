@@ -404,9 +404,11 @@ Your `.env` after setup looks roughly like this:
 
 ```bash
 NANOCLAW_DEFAULT_PROVIDER=amplifier-agent
-AMPLIFIER_AGENT_INTERNAL_PROVIDER=anthropic      # or openai / azure-openai / ollama
-ANTHROPIC_API_KEY=sk-ant-api...                  # or whichever provider key
+AMPLIFIER_AGENT_MODEL=anthropic:claude-sonnet-4-6   # <provider>:<model> — provider is one of anthropic / openai / azure-openai / ollama
+ANTHROPIC_API_KEY=sk-ant-api...                     # or whichever provider key
 ```
+
+`AMPLIFIER_AGENT_MODEL` is the single install-wide knob for amplifier-agent: backend and model travel together as `<provider>:<model>`, so they can never come from two different settings and disagree. Both parts are required (there is no backend-only / bare-model form). A per-agent-group `--model` (same format) overrides it.
 
 Your `data/v2.db` has an `agent_groups` row for the CLI agent with `agent_provider = "amplifier-agent"`. Each future agent group (added via channel setup or `pnpm run ncl agent add`) inherits this default and can override.
 
@@ -419,7 +421,7 @@ Your `data/v2.db` has an `agent_groups` row for the CLI agent with `agent_provid
 Edit `.env`:
 
 ```bash
-AMPLIFIER_AGENT_INTERNAL_PROVIDER=openai
+AMPLIFIER_AGENT_MODEL=openai:gpt-5
 OPENAI_API_KEY=sk-proj-...
 ```
 
@@ -447,7 +449,7 @@ The agent-runner couldn't get a clean response back from the engine subprocess. 
 | Cause | Fix |
 |---|---|
 | Container started before the latest engine landed | Send a follow-up message — the container's lifecycle picks up changes per-spawn |
-| `OPENAI_API_KEY` (or similar) missing | Check `.env` has the right key for `AMPLIFIER_AGENT_INTERNAL_PROVIDER` |
+| `OPENAI_API_KEY` (or similar) missing | Check `.env` has the right key for the provider named in `AMPLIFIER_AGENT_MODEL` (`<provider>:<model>`) |
 | Container was built before a tag move | Rebuild with `--no-cache`: `cd container && docker build --no-cache -t nanoclaw-agent-v2-$(node -e "import('./dist/install-slug.js').then(m=>console.log(m.getInstallSlug(process.cwd().replace('/container','')))) ").latest .` |
 
 ### `"Unsupported parameter: 'reasoning.effort' is not supported with this model"`

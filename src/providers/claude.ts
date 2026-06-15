@@ -13,16 +13,25 @@
  *   - ANTHROPIC_BASE_URL — so the SDK knows where to call
  *   - ANTHROPIC_AUTH_TOKEN=placeholder — so the SDK adds an
  *     Authorization: Bearer header for OneCLI to overwrite
+ *
+ * Model override: ANTHROPIC_MODEL in .env is forwarded to the container
+ * so the Claude Agent SDK uses that model instead of its default. This
+ * is the install-wide equivalent of amplifier-agent's per-agent model
+ * selection (via `--model anthropic:X`). Used by eval harnesses to pin
+ * a specific model for comparison runs. Leave unset for default behavior.
  */
 import { readEnvFile } from '../env.js';
 import { registerProviderContainerConfig } from './provider-container-registry.js';
 
 registerProviderContainerConfig('claude', () => {
-  const dotenv = readEnvFile(['ANTHROPIC_BASE_URL']);
+  const dotenv = readEnvFile(['ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL']);
   const env: Record<string, string> = {};
   if (dotenv.ANTHROPIC_BASE_URL) {
     env.ANTHROPIC_BASE_URL = dotenv.ANTHROPIC_BASE_URL;
     env.ANTHROPIC_AUTH_TOKEN = 'placeholder';
+  }
+  if (dotenv.ANTHROPIC_MODEL) {
+    env.ANTHROPIC_MODEL = dotenv.ANTHROPIC_MODEL;
   }
   return { env };
 });
