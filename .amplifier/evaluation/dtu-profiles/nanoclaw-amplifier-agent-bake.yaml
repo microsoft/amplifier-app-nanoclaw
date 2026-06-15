@@ -375,20 +375,16 @@ provision:
     # engine forwards to the provider module.
     #
     # Agent ID is auto-generated, but there's only ever one CLI agent
-    # in a fresh nanoclaw install -- query `groups list --json` to find
-    # it. Skipped if MODEL is unset; provider catalog default is used.
+    # in a fresh nanoclaw install -- awk the table output of
+    # `groups list` for the first row starting with `ag-`. No embedded
+    # multi-line python (would trip the DTU YAML loader). Skipped if
+    # MODEL is unset; provider catalog default is used.
     - |
       if [ -n "${MODEL}" ]; then
         runuser -u nano -- env HOME=/home/nano PATH="/home/nano/.local/bin:/usr/local/bin:/usr/bin:/bin" bash -c "
           cd /home/nano/nanoclaw
-          AGENT_ID=\$(pnpm ncl groups list --json 2>/dev/null | python3 -c 'import json,sys,re
-raw=sys.stdin.read()
-# strip pnpm preamble lines that arent JSON
-start=raw.find(\"[\")
-if start<0: start=raw.find(\"{\")
-data=json.loads(raw[start:])
-rows=data if isinstance(data,list) else data.get(\"rows\",[])
-print(rows[0][\"id\"])')
+          AGENT_ID=\$(pnpm ncl groups list 2>/dev/null | awk '/^ag-/{print \$1; exit}')
+          if [ -z \"\$AGENT_ID\" ]; then echo 'ERROR: could not find agent group id'; exit 1; fi
           echo \"configuring agent \$AGENT_ID with model anthropic:${MODEL}\"
           pnpm ncl groups config update --id \"\$AGENT_ID\" --model \"anthropic:${MODEL}\"
         "
