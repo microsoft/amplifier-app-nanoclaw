@@ -112,6 +112,19 @@ PY
     VARARGS+=("--var" "NANOCLAW_REPO=$NANOCLAW_REPO")
   fi
 
+  # Optional CONTAINER_LOGS env var → bake-time --var CONTAINER_LOGS=X.
+  # When set to "enabled", the bake writes NANOCLAW_CONTAINER_LOGS=enabled
+  # to /home/nano/nanoclaw/.env so nanoclaw's src/config.ts:51-52 turns on
+  # per-instance agent container log persistence. Each spawned agent
+  # container then writes its stdout+stderr to
+  # logs/containers/<group>/<containerName>.log via inherited file
+  # descriptor. Unset → no on-disk container logs (nanoclaw default).
+  # Baked into the golden image so every relaunched task inherits it.
+  if [ -n "${CONTAINER_LOGS:-}" ]; then
+    echo "  enabling container log persistence: $CONTAINER_LOGS"
+    VARARGS+=("--var" "CONTAINER_LOGS=$CONTAINER_LOGS")
+  fi
+
   # Clean up the half-baked build container if anything below fails.
   bake_cleanup() { incus delete --force "$BUILD" >/dev/null 2>&1 || true; }
   trap bake_cleanup ERR

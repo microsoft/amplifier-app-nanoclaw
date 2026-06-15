@@ -247,6 +247,33 @@ provision:
       echo "wrote .env:"
       sed 's/=.*KEY=.*$/=<redacted>/' /home/nano/nanoclaw/.env
 
+    # ── 5b. Enable agent container log persistence if CONTAINER_LOGS is set ──
+    # When run.sh / run-clawbench.sh passes --var CONTAINER_LOGS=enabled,
+    # append NANOCLAW_CONTAINER_LOGS=enabled to .env. nanoclaw's
+    # src/config.ts:51-52 reads this from .env and (when "enabled") persists
+    # each spawned agent container's stdout+stderr to
+    # logs/containers/<group>/<containerName>.log via an inherited file
+    # descriptor. Default (var unset) preserves nanoclaw's stdio=ignore
+    # behaviour — no on-disk container logs.
+    #
+    # Done here (not in step 5's heredoc) so the knob stays optional and
+    # the heredoc keeps a single responsibility — provider/model config.
+    - |
+      if [ -n "${CONTAINER_LOGS}" ]; then
+        runuser -u nano -- bash -c "
+          cd /home/nano/nanoclaw
+          if grep -q '^NANOCLAW_CONTAINER_LOGS=' .env; then
+            sed -i 's|^NANOCLAW_CONTAINER_LOGS=.*|NANOCLAW_CONTAINER_LOGS=${CONTAINER_LOGS}|' .env
+          else
+            echo 'NANOCLAW_CONTAINER_LOGS=${CONTAINER_LOGS}' >> .env
+          fi
+          echo 'pinned NANOCLAW_CONTAINER_LOGS in .env:'
+          grep '^NANOCLAW_CONTAINER_LOGS=' .env
+        "
+      else
+        echo "CONTAINER_LOGS var not set; agent container logs disabled (default)"
+      fi
+
     # ── 6. Install nanoclaw dependencies ──
     - |
       runuser -u nano -- env HOME=/home/nano bash -c '
