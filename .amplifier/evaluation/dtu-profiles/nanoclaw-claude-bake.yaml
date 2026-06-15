@@ -281,6 +281,31 @@ provision:
         echo "MODEL var not set; claude will use SDK default"
       fi
 
+    # ── 9d. Enable agent container log persistence if CONTAINER_LOGS is set ──
+    # When run.sh passes --var CONTAINER_LOGS=enabled, write
+    # NANOCLAW_CONTAINER_LOGS=enabled to .env. nanoclaw's src/config.ts:51-52
+    # reads this from .env and (when "enabled") persists each spawned agent
+    # container's stdout+stderr to logs/containers/<group>/<containerName>.log
+    # via an inherited file descriptor. Default (var unset) preserves
+    # nanoclaw's stdio=ignore behaviour — no on-disk container logs.
+    - |
+      if [ -n "${CONTAINER_LOGS}" ]; then
+        touch /home/nano/nanoclaw/.env
+        chown nano:nano /home/nano/nanoclaw/.env
+        runuser -u nano -- bash -c "
+          cd /home/nano/nanoclaw
+          if grep -q '^NANOCLAW_CONTAINER_LOGS=' .env; then
+            sed -i 's|^NANOCLAW_CONTAINER_LOGS=.*|NANOCLAW_CONTAINER_LOGS=${CONTAINER_LOGS}|' .env
+          else
+            echo 'NANOCLAW_CONTAINER_LOGS=${CONTAINER_LOGS}' >> .env
+          fi
+          echo 'pinned NANOCLAW_CONTAINER_LOGS in .env:'
+          grep '^NANOCLAW_CONTAINER_LOGS=' .env
+        "
+      else
+        echo "CONTAINER_LOGS var not set; agent container logs disabled (default)"
+      fi
+
     # ── 10. Start the nanoclaw service ──
     # Same pattern as the amplifier-agent profile: skip the systemd
     # registration and exec the compiled JS directly.
