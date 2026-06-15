@@ -221,7 +221,7 @@ provision:
     - |
       cat > /home/nano/nanoclaw/.env <<EOF
       NANOCLAW_DEFAULT_PROVIDER=amplifier-agent
-      AMPLIFIER_AGENT_INTERNAL_PROVIDER=${INTERNAL_PROVIDER}
+      AMPLIFIER_AGENT_MODEL=${INTERNAL_PROVIDER}:${MODEL}
       EOF
       case "${INTERNAL_PROVIDER}" in
         anthropic)
@@ -366,37 +366,19 @@ provision:
           --provider amplifier-agent
       '
 
-    # ── 13b. Pin agent model if eval MODEL var is set ──
-    # When run.sh passes --var MODEL=<X>, configure the agent group's
-    # container_config to use that model via the v0.6.0 colon-prefix
-    # mechanism. Host-side amplifier-agent.ts parses `anthropic:<X>`
-    # into host_config.provider.module = "anthropic" and
-    # host_config.provider.config.default_model = "<X>", which the
-    # engine forwards to the provider module.
-    #
-    # Agent ID is auto-generated, but there's only ever one CLI agent
-    # in a fresh nanoclaw install -- awk the table output of
-    # `groups list` for the first row starting with `ag-`. No embedded
-    # multi-line python (would trip the DTU YAML loader). Skipped if
-    # MODEL is unset; provider catalog default is used.
-    - |
-      if [ -n "${MODEL}" ]; then
-        runuser -u nano -- env HOME=/home/nano PATH="/home/nano/.local/bin:/usr/local/bin:/usr/bin:/bin" bash -c "
-          cd /home/nano/nanoclaw
-          AGENT_ID=\$(pnpm ncl groups list 2>/dev/null | awk '/^ag-/{print \$1; exit}')
-          if [ -z \"\$AGENT_ID\" ]; then echo 'ERROR: could not find agent group id'; exit 1; fi
-          echo \"configuring agent \$AGENT_ID with model anthropic:${MODEL}\"
-          pnpm ncl groups config update --id \"\$AGENT_ID\" --model \"anthropic:${MODEL}\"
-        "
-      else
-        echo "MODEL var not set; amplifier-agent will use provider catalog default"
-      fi
+    # NOTE: the agent model is pinned install-wide via AMPLIFIER_AGENT_MODEL
+    # in .env (step 5), seeded before the service starts. Both backend and
+    # model travel together as ${INTERNAL_PROVIDER}:${MODEL}, so there is no
+    # separate per-group ncl pin step anymore. MODEL is now REQUIRED — with
+    # it unset the .env value is "${INTERNAL_PROVIDER}:" and the engine fails
+    # loudly at first spawn (amplifier-agent has no catalog-default fallback
+    # under the always-explicit model contract).
 
     # ── 14. Sanity check ──
     - |
       echo "nanoclaw process: $(cat /home/nano/nanoclaw/nanoclaw.pid)"
       ls -la /home/nano/nanoclaw/data/cli.sock /home/nano/nanoclaw/data/ncl.sock /home/nano/nanoclaw/data/v2.db
-      grep -E "^NANOCLAW_DEFAULT_PROVIDER|^AMPLIFIER_AGENT_INTERNAL_PROVIDER" /home/nano/nanoclaw/.env
+      grep -E "^NANOCLAW_DEFAULT_PROVIDER|^AMPLIFIER_AGENT_MODEL" /home/nano/nanoclaw/.env
       echo "nano uid: $(id -u nano) — agent container USER node uid: 1000 — match: OK"
 
     # ── 15. Freeze for golden image ──

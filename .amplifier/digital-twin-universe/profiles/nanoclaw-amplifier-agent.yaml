@@ -215,7 +215,11 @@ provision:
     - |
       cat > /home/nano/nanoclaw/.env <<EOF
       NANOCLAW_DEFAULT_PROVIDER=amplifier-agent
-      AMPLIFIER_AGENT_INTERNAL_PROVIDER=${INTERNAL_PROVIDER}
+      # Single <provider>:<model> knob. MODEL must be supplied at launch (no
+      # catalog-default fallback under the always-explicit model contract);
+      # with it unset the value is "${INTERNAL_PROVIDER}:" and the engine
+      # fails loudly at first spawn.
+      AMPLIFIER_AGENT_MODEL=${INTERNAL_PROVIDER}:${MODEL}
       # Persist agent-container stdout+stderr to disk under
       # /home/nano/nanoclaw/logs/containers/<group>/<container>.log
       # for post-mortem inspection of engine boot, host_config.json
@@ -372,7 +376,7 @@ provision:
     - |
       echo "nanoclaw process: $(cat /home/nano/nanoclaw/nanoclaw.pid)"
       ls -la /home/nano/nanoclaw/data/cli.sock /home/nano/nanoclaw/data/ncl.sock /home/nano/nanoclaw/data/v2.db
-      grep -E "^NANOCLAW_DEFAULT_PROVIDER|^AMPLIFIER_AGENT_INTERNAL_PROVIDER" /home/nano/nanoclaw/.env
+      grep -E "^NANOCLAW_DEFAULT_PROVIDER|^AMPLIFIER_AGENT_MODEL" /home/nano/nanoclaw/.env
       echo "nano uid: $(id -u nano) — agent container USER node uid: 1000 — match: OK"
 
 readiness:

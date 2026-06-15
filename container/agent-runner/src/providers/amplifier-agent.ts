@@ -250,7 +250,11 @@ class AmplifierAgentQuery implements AgentQuery {
           // HOST_CONFIG_PATH and which the engine reads via `--config`.
           // AMPLIFIER_AGENT_INTERNAL_PROVIDER is still consulted here to
           // decide which credential env vars to allow into the engine
-          // subprocess, but it no longer drives provider routing.
+          // subprocess, but it no longer drives provider routing. It is no
+          // longer an operator knob either — the host derives it from the
+          // <provider>: prefix of AMPLIFIER_AGENT_MODEL (or a per-group
+          // --model) and forwards it as a container env (see the host-side
+          // src/providers/amplifier-agent.ts in the nanoclaw repo root).
           //
           // ENV ALLOWLIST: The wrapper's DEFAULT_ALLOWLIST
           // (PATH/HOME/USER/LANG/TERM/TMPDIR) gets replaced — not extended —
