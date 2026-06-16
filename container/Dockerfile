@@ -20,16 +20,23 @@ ARG INSTALL_CJK_FONTS=false
 # mean every rebuild silently picks up the latest and can break in lockstep
 # across all users.
 ARG CLAUDE_CODE_VERSION=2.1.128
-# Pinned to v0.6.0 (engine) / wrapper v0.7.0 by SHA. Both tags point at the
-# same commit (the release bump in #55).
-# dc535ac corresponds to "chore(release): bump engine to 0.6.0 and TS wrapper
-# to 0.7.0 (#55)". Major v0.6.0 changes: XDG storage layout dropped in favor
-# of unified ~/.amplifier-agent/{state,cache,config}/; --provider CLI flag
-# removed (provider selection moves to host_config.json); auto-migration
-# replaced by user-invoked `amplifier-agent migrate`; --output default flipped
-# from json to text (irrelevant here since the wrapper hardcodes --output
-# json). See amplifier-agent docs/designs/2026-06-11-drop-xdg-and-flag-cleanup.md.
-ARG AMPLIFIER_AGENT_REF=dc535ac04948a4b4804b0c2bd7ec29e920b0dd68
+# Temporarily tracking the upstream feature branch `feat/behavioral-anchor-bundle`
+# to evaluate the behavioral-anchor bundle work in-flight. Branch tip at the
+# time of this bump: ad87d253e30ae01efa782ac055d030097c61f8c5. Because this is
+# a branch (not a SHA), rebuilds will silently pick up new commits as the
+# branch advances — fine for active eval/dev, but switch to a SHA for
+# reproducible benchmark runs (the line below accepts either).
+#
+# Previous pin (v0.6.0 engine / v0.7.0 wrapper, release bump #55):
+#   dc535ac04948a4b4804b0c2bd7ec29e920b0dd68
+# v0.6.0 baseline (carried over by the feature branch): XDG storage layout
+# dropped in favor of unified ~/.amplifier-agent/{state,cache,config}/;
+# --provider CLI flag removed (provider selection moves to host_config.json);
+# auto-migration replaced by user-invoked `amplifier-agent migrate`; --output
+# default flipped from json to text (irrelevant here since the wrapper
+# hardcodes --output json). See amplifier-agent
+# docs/designs/2026-06-11-drop-xdg-and-flag-cleanup.md.
+ARG AMPLIFIER_AGENT_REF=feat/behavioral-anchor-bundle
 ARG AGENT_BROWSER_VERSION=latest
 ARG VERCEL_VERSION=52.2.1
 ARG BUN_VERSION=1.3.12
