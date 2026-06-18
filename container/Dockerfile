@@ -20,16 +20,21 @@ ARG INSTALL_CJK_FONTS=false
 # mean every rebuild silently picks up the latest and can break in lockstep
 # across all users.
 ARG CLAUDE_CODE_VERSION=2.1.128
-# Pinned to v0.6.0 (engine) / wrapper v0.7.0 by SHA. Both tags point at the
-# same commit (the release bump in #55).
-# dc535ac corresponds to "chore(release): bump engine to 0.6.0 and TS wrapper
-# to 0.7.0 (#55)". Major v0.6.0 changes: XDG storage layout dropped in favor
-# of unified ~/.amplifier-agent/{state,cache,config}/; --provider CLI flag
-# removed (provider selection moves to host_config.json); auto-migration
-# replaced by user-invoked `amplifier-agent migrate`; --output default flipped
-# from json to text (irrelevant here since the wrapper hardcodes --output
-# json). See amplifier-agent docs/designs/2026-06-11-drop-xdg-and-flag-cleanup.md.
-ARG AMPLIFIER_AGENT_REF=dc535ac04948a4b4804b0c2bd7ec29e920b0dd68
+# Pinned to a specific SHA for reproducible builds. The XDG storage layout
+# was dropped in v0.6.0 in favor of a unified ~/.amplifier-agent/{state,cache,
+# config}/ root; the --provider CLI flag was removed (provider selection moves
+# to host_config.json); auto-migration was replaced by user-invoked
+# `amplifier-agent migrate`. See amplifier-agent
+# docs/designs/2026-06-11-drop-xdg-and-flag-cleanup.md.
+#
+# cef3fb5 (main HEAD as of 2026-06-18) corresponds to "feat(routing): integrate
+# model routing with per-provider matrix selection (#64)". Notable changes
+# since the previous pin (dc535ac):
+#   - Engine bumped to 0.7.0 (#63)
+#   - amplifier-agent-client replaced with amplifier-agent-py at protocol 0.3.0 (#56)
+#   - Built-in bundle replaced with vendored behavioral-anchor (#59)
+#   - Per-provider routing matrix selection (#64)
+ARG AMPLIFIER_AGENT_REF=cef3fb5374dc10e9e34ece89a3a53648d9933313
 ARG AGENT_BROWSER_VERSION=latest
 ARG VERCEL_VERSION=52.2.1
 ARG BUN_VERSION=1.3.12
